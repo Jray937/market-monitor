@@ -43,17 +43,34 @@ def _init_client() -> RESTClient:
 
 def _to_contract_list(resp) -> list:
     """
-    統一響應轉換為 list
-    Pro: resp.results 是 list
-    Free: resp 本身就是 list
+    統一響應轉換為 list（永遠返回 list，可安全重複迭代）
+
+    支持類型：
+      - list：直接返回
+      - generator / iterator：完全迭代後返回 list（避免一次性問題）
+      - Pro 回應對象（有 .results）：迭代 .results 返回 list
     """
-    if hasattr(resp, "results") and isinstance(resp.results, list):
-        return resp.results
-    if isinstance(resp, list):
-        return resp
+    # Pro 版：回應對象有 .results
+    if hasattr(resp, "results") and not isinstance(resp, (list, tuple, set, frozenset)):
+        try:
+            it = iter(resp.results)
+        except (TypeError, AttributeError):
+            it = iter([])
+        return list(it)
+
+    # 已是 list / tuple / set
+    if isinstance(resp, (list, tuple, set, frozensist)):
+        return list(resp)
+
+    # generator / iterator：完全迭代後轉 list（關鍵修復！）
+    try:
+        it = iter(resp)
+        return list(it)
+    except TypeError:
+        pass
+
     raise TypeError(
-        f"無法解析 Polygon 回應類型，期望 list 或有 .results 的對象，"
-        f"實際：{type(resp).__name__}。"
+        f"無法解析 Polygon 回應類型，期望 list/generator，實際：{type(resp).__name__}。"
         f"請確認 POLYGON_API_TIER 是否正確（當前：{_API_TIER}）"
     )
 
