@@ -20,31 +20,41 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Python syntax check
-        run: python -m py_compile bot.py src/*.py
+        run: |
+          python -m py_compile bot.py
+          python -m py_compile src/config.py
+          python -m py_compile src/data_fetcher.py
+          python -m py_compile src/analyzer.py
+          python -m py_compile src/alert_manager.py
+          python -m py_compile src/discord_bot.py
+          echo "All syntax OK"
 
-      - name: Import check (no missing modules)
-        run: python -c "
-            import sys
-            sys.path.insert(0, '.')
+      - name: Import check
+        run: |
+          python -c "
+            import sys; sys.path.insert(0, '.')
             from src import config, data_fetcher, analyzer, alert_manager, logger
             import src.discord_bot
-            print('✅ All modules imported successfully')
+            print('All modules OK')
           "
 
-      - name: Config parse check
-        run: python -c "
+      - name: Config parse check (CI dummy env)
+        run: |
+          python -c "
+            import os, sys
+            sys.path.insert(0, '.')
+            os.environ['DISCORD_BOT_TOKEN'] = 'ci_dummy_token'
             from src.config import load_config, parse_config
             cfg = load_config()
             result = parse_config(cfg)
-            print(f'parse_config returns {len(result)} values: OK')
+            print('parse_config returned', len(result), 'values: OK')
           "
 
-      - name: Bot entry point check
-        run: python -c "
-            import ast, sys
+      - name: Bot AST check
+        run: |
+          python -c "
+            import ast
             with open('bot.py') as f:
                 tree = ast.parse(f.read())
-            # verify bot.py has valid syntax and imports src.discord_bot
-            imports = [n for n in ast.walk(tree) if isinstance(n, ast.ImportFrom)]
-            print('✅ bot.py syntax OK')
+            print('bot.py syntax OK')
           "
