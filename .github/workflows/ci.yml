@@ -3,10 +3,11 @@ name: CI / Build Check
 on:
   pull_request:
     branches: [main]
+  workflow_dispatch:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
 
@@ -23,7 +24,7 @@ jobs:
           set -e
           python -m py_compile bot.py
           for f in src/*.py; do python -m py_compile "$f"; done
-          echo "Syntax OK"
+          echo Syntax OK
 
       - name: Import check
         run: |
@@ -33,7 +34,7 @@ import sys
 sys.path.insert(0, '.')
 from src import config, data_fetcher, analyzer, alert_manager, logger
 import src.discord_bot
-print('All imports OK')
+print("All imports OK")
 PYEOF
 
       - name: Config parse check
@@ -42,11 +43,11 @@ PYEOF
           python << 'PYEOF'
 import os, sys
 sys.path.insert(0, '.')
-os.environ['DISCORD_BOT_TOKEN'] = 'ci_dummy'
+os.environ["DISCORD_BOT_TOKEN"] = "ci_dummy"
 from src.config import load_config, parse_config
 cfg = load_config()
 result = parse_config(cfg)
-print('parse_config:', len(result), 'values OK')
+print("parse_config:", len(result), "values OK")
 PYEOF
 
       - name: Bot entry check
