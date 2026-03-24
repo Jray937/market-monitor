@@ -1,0 +1,34 @@
+name: CI / Build Check
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Syntax check
+        run: |
+          set -e
+          python -m py_compile bot.py
+          for f in src/*.py; do python -m py_compile "$f"; done
+
+      - name: Import check
+        run: python3 -c "import sys; sys.path.insert(0,'.'); from src import config,data_fetcher,analyzer,alert_manager,logger; import src.discord_bot; print('All imports OK')"
+
+      - name: Config parse check
+        run: python3 -c "import os,sys; sys.path.insert(0,'.'); os.environ['DISCORD_BOT_TOKEN']='ci'; from src.config import load_config,parse_config; r=parse_config({}); print('OK:',len(r))"
+
+      - name: Bot AST check
+        run: python3 -c "import ast; ast.parse(open('bot.py').read()); print('bot.py OK')"
