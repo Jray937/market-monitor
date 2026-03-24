@@ -446,5 +446,114 @@ def main():
     client.run(bot_token, log_handler=None)
 
 
+# ═══════════════════════════════════════════════════════════════════
+# 期權命令（需 POLYGON_API_KEY）
+# ═══════════════════════════════════════════════════════════════════
+
+@app_commands.describe(symbol="股票代碼，例如：AAPL、TSLA")
+@tree.command(name="期权到期", description="查看指定股票的期權到期日")
+async def cmd_option_expiry(interaction: discord.Interaction, symbol: str):
+    await interaction.response.defer()
+    sym = symbol.strip().upper()
+    try:
+        from src.options_fetcher import get_option_expirations
+        expirations = get_option_expirations(sym)
+    except ValueError as e:
+        await interaction.followup.send(f"⚠️ {e}")
+        return
+    except Exception as e:
+        await interaction.followup.send(f"⚠️ 取得期權到期日失敗：{e}")
+        return
+    if not expirations:
+        await interaction.followup.send(f"⚠️ 找不到 {sym} 的期權數據")
+        return
+    recent = expirations[:6]
+    lines = [f"**📅 {sym} 期權到期日**\n"]
+    for exp in recent:
+        days = exp["days_to_expiry"]
+        label = "（本週）" if days <= 7 else ("（下週）" if days <= 14 else "")
+        lines.append(f"  `{exp['date']}`  還有 {days} 天 {label}")
+    if len(expirations) > 6:
+        lines.append(f"\n_還有 {len(expirations) - 6} 個更多到期日_")
+    lines.append("\n使用 `/期权链 <代碼> <到期日>` 查看詳細 chain")
+    await interaction.followup.send("\n".join(lines))
+
+
+@app_commands.describe(symbol="股票代碼", expiration="到期日 (YYYY-MM-DD)")
+@tree.command(name="期权链", description="查看指定到期日的完整期權鏈")
+async def cmd_option_chain(interaction: discord.Interaction, symbol: str, expiration: str):
+    await interaction.response.defer()
+    sym = symbol.strip().upper()
+    try:
+        from src.options_fetcher import get_option_chain
+        chain = get_option_chain(sym, expiration)
+    except ValueError as e:
+        await interaction.followup.send(f"⚠️ {e}")
+        return
+    except Exception as e:
+        await interaction.followup.send(f"⚠️ 取得期權鏈失敗：{e}")
+        return
+    underlying = chain.get("underlying_price", 0)
+    calls, puts = chain.get("calls", []), chain.get("puts", [])
+    if not calls and not puts:
+        await interaction.followup.send(f"⚠️ 找不到 {sym} {expiration} 的期權數據")
+        return
+
+    atm_call = min(calls, key=lambda x: abs(x["strike"] - underlying)) if underlying and calls else None
+    atm_put = min(puts, key=lambda x: abs(x["strike"] - underlying)) if underlying and puts else None
+    fields = [
+        {"name": "標的現價", "value": f"**${underlying:.2f}**", "inline": True},
+        {"name": "到期日", "value": f"`{expiration}`", "inline": True},
+        {"name": "合約數量", "value": f"Calls: {len(calls)} | Puts: {len(puts)}", "inline": False},
+    ]
+    if atm_call:
+        fields.append({"name": "📈 ATM Call", "value": f"行權 `${atm_call['strike']:.2f}` 報價 `${atm_call['last']:.2f}` IV `{atm_call['iv']:.1f}%` OI `{atm_call['oi']:,}` Δ `{atm_call['delta']:.3f}`", "inline": False})
+    if atm_put:
+        fields.append({"name": "📉 ATM Put", "value": f"行權 `${atm_put['strike']:.2f}` 報價 `${atm_put['last']:.2f}` IV `{atm_put['iv']:.1f}%` OI `{atm_put['oi']:,}` Δ `{atm_put['delta']:.3f}`", "inline": False})
+    fields.append({"name": "📊 ITM/OTM", "value": f"C ITM:{sum(1 for c in calls if c['itm']=='ITM')} C OTM:{sum(1 for c in calls if c['itm']=='OTM')} P ITM:{sum(1 for p in puts if p['itm']=='ITM')} P OTM:{sum(1 for p in puts if p['itm']=='OTM')}", "inline": False})
+    embed = make_embed(title=f"⛓️ [{sym}] 期權鏈 — {expiration}", description=f"標的現價：**${underlying:.2f}**", color=0x00C851, fields=fields, footer=f"Market Monitor | 免費版 Polygon.io")
+    await interaction.followup.send(embed=embed)
+
+
+@app_commands.describe(symbol="股票代碼", expiration="到期日 (YYYY-MM-DD)")
+@tree.command(name="期权墙", description="查看期權牆（OI Wall）— 哪個行權價堆積最多未平倉量")
+async def cmd_option_wall(interaction: discord.Interaction, symbol: str, expiration: str):
+    await interaction.response.defer()
+    sym = symbol.strip().upper()
+    try:
+        from src.options_fetcher import build_options_wall
+        wall = build_options_wall(sym, expiration)
+    except ValueError as e:
+        await interaction.followup.send(f"⚠️ {e}")
+        return
+    except Exception as e:
+        await interaction.followup.send(f"⚠️ 取得期權牆失敗：{e}")
+        return
+    underlying = wall.get("underlying_price", 0)
+    oi_wall = wall.get("oi_wall")
+    calls, puts = wall.get("calls", []), wall.get("puts", [])
+    total_calls_oi = wall.get("total_calls_oi", 0)
+    total_puts_oi = wall.get("total_puts_oi", 0)
+    if not calls and not puts:
+        await interaction.followup.send(f"⚠️ 找不到 {sym} {expiration} 的 OI 數據")
+        return
+
+    wall_desc = ""
+    if oi_wall:
+        emoji = "📈" if oi_wall["type"] == "call" else "📉"
+        wall_desc = f"{emoji} **OI 牆：${oi_wall['strike']:.2f}** ({oi_wall['type'].upper()}) — OI: {oi_wall['oi']:,} 合約\n"
+
+    top_puts = sorted(puts, key=lambda x: x["oi"], reverse=True)[:5]
+    top_calls = sorted(calls, key=lambda x: x["oi"], reverse=True)[:5]
+    ratio = total_calls_oi / max(total_puts_oi, 1)
+    fields = [
+        {"name": "📉 Put OI 排行", "value": "\n".join([f"`${p['strike']:.2f}` {p['itm'][0]}  {p['oi']:>8,}OI" for p in top_puts]) or "無數據", "inline": True},
+        {"name": "📈 Call OI 排行", "value": "\n".join([f"`${c['strike']:.2f}` {c['itm'][0]}  {c['oi']:>8,}OI" for c in top_calls]) or "無數據", "inline": True},
+        {"name": "📊 總OI 比率", "value": f"C: **{total_calls_oi:,}**  |  P: **{total_puts_oi:,}**  |  C/P = **{ratio:.2f}**", "inline": False},
+    ]
+    embed = make_embed(title=f"🧱 [{sym}] 期權牆 — {expiration}", description=f"{wall_desc}📍 現價：**${underlying:.2f}**" if underlying else f"{wall_desc}到期日：`{expiration}`", color=0xFF8C00, fields=fields, footer=f"Market Monitor | OI=未平倉量")
+    await interaction.followup.send(embed=embed)
+
+
 if __name__ == "__main__":
     main()
