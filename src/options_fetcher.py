@@ -1,6 +1,17 @@
 """
 Polygon.io 期權數據獲取
-免費版支援：歷史 K 線（5 年）、基本期權到期日、期權報價（延遲 15 分鐘）
+
+支援版本：
+  - 免費版（默認）：`POLYGON_API_TIER=free` 或未設定
+  - Pro 版：`POLYGON_API_TIER=pro`
+
+版本區分邏輯：
+  - Pro：`list_options_contracts` 返回 ListResponse 對象，屬性 `.results` 是 list
+  - Free：返回普通 list，直接迭代
+
+環境變數：
+  POLYGON_API_KEY   — API Key（必要）
+  POLYGON_API_TIER  — `free`（默認）或 `pro`
 """
 import os
 import sys
@@ -12,115 +23,139 @@ from .logger import setup_logger
 
 log = setup_logger("options_fetcher")
 
-# ── Client 單例 ──
 _client: Optional[RESTClient] = None
+_API_TIER: str = "free"
 
 
-def get_client() -> RESTClient:
-    global _client
-    if _client is None:
-        api_key = os.environ.get("POLYGON_API_KEY")
-        if not api_key:
-            raise ValueError("❌ 缺少 POLYGON_API_KEY，請在 Railway 環境變數設定")
-        _client = RESTClient(api_key)
-        log.info("Polygon client 初始化完成")
+def _init_client() -> RESTClient:
+    """初始化並快取 Polygon 客戶端"""
+    global _client, _API_TIER
+    if _client is not None:
+        return _client
+    api_key = os.environ.get("POLYGON_API_KEY")
+    if not api_key:
+        raise ValueError("❌ 缺少 POLYGON_API_KEY，請在 Railway 環境變數設定")
+    _API_TIER = os.environ.get("POLYGON_API_TIER", "free").lower()
+    _client = RESTClient(api_key)
+    log.info(f"Polygon client 初始化 | Tier: {_API_TIER} | Key: ***{api_key[-4:]}")
     return _client
 
 
-# ── 期權到期日 ──
-
-def get_option_expirations(ticker: str) -> list[dict]:
+def _to_contract_list(resp) -> list:
     """
-    取得股票的所有期權到期日
-    免費版：返回未來 12 個月內的每月到期日
+    統一響應轉換為 list
+    Pro: resp.results 是 list
+    Free: resp 本身就是 list
     """
-    client = get_client()
-    sym = _stock_to_underlying(ticker)
-
-    try:
-        # 拿期權鏈（當月 + 下月）
-        resp = client.list_options_contracts(
-            underlying_ticker=sym,
-            expiration_date_gte=datetime.utcnow().strftime("%Y-%m-%d"),
-            expiration_date_lte=(datetime.utcnow() + timedelta(days=365)).strftime("%Y-%m-%d"),
-            limit=100,
-        )
-        expirations = {}
-        for c in resp:
-            if c and c.get("expiration_date"):
-                exp = c["expiration_date"]
-                if exp not in expirations:
-                    expirations[exp] = {
-                        "date": exp,
-                        "days_to_expiry": max(0, (datetime.strptime(exp, "%Y-%m-%d") - datetime.utcnow()).days),
-                    }
-        result = sorted(expirations.values(), key=lambda x: x["date"])
-        log.info(f"{sym} 找到 {len(result)} 個到期日")
-        return result
-    except Exception as e:
-        log.error(f"取得期權到期日失敗：{e}")
-        return []
+    if hasattr(resp, "results") and isinstance(resp.results, list):
+        return resp.results
+    if isinstance(resp, list):
+        return resp
+    raise TypeError(
+        f"無法解析 Polygon 回應類型，期望 list 或有 .results 的對象，"
+        f"實際：{type(resp).__name__}。"
+        f"請確認 POLYGON_API_TIER 是否正確（當前：{_API_TIER}）"
+    )
 
 
 def _stock_to_underlying(ticker: str) -> str:
-    """轉換股票代碼為 Polygon 格式"""
+    """股票代碼標準化"""
     t = ticker.upper().replace("-", "")
-    # 加密貨幣不需要轉換
     if "-USD" in ticker.upper():
         return t
     return t
 
 
-# ── 期權鏈（單一到期日） ──
+def get_option_expirations(ticker: str) -> list[dict]:
+    """
+    取得股票的所有期權到期日
+
+    輸入：ticker: str  — 股票代碼，例如 "AAPL"、"TSLA"
+    輸出：list[dict]  — 每項含 {"date": "YYYY-MM-DD", "days_to_expiry": int}
+    """
+    client = _init_client()
+    sym = _stock_to_underlying(ticker)
+    try:
+        resp = client.list_options_contracts(
+            underlying_ticker=sym,
+            expiration_date_gte=datetime.utcnow().strftime("%Y-%m-%d"),
+            expiration_date_lte=(datetime.utcnow() + timedelta(days=365)).strftime("%Y-%m-%d"),
+            limit=500,
+        )
+    except Exception as e:
+        log.error(f"[get_option_expirations] API 調用失敗：{e}")
+        return []
+
+    contracts = _to_contract_list(resp)
+    expirations: dict = {}
+    for c in contracts:
+        if not c or not isinstance(c, dict):
+            continue
+        exp = c.get("expiration_date")
+        if not exp:
+            continue
+        if exp not in expirations:
+            expirations[exp] = {
+                "date": exp,
+                "days_to_expiry": max(0, (datetime.strptime(exp, "%Y-%m-%d") - datetime.utcnow()).days),
+            }
+
+    result = sorted(expirations.values(), key=lambda x: x["date"])
+    log.info(f"[get_option_expirations] {sym} → {len(result)} 個到期日")
+    return result
+
 
 def get_option_chain(ticker: str, expiration_date: str) -> dict:
     """
     取得指定到期日的完整期權鏈
-    返回：{
-        'calls': [{strike, last, iv, oi, delta, gamma, theta, vega, premium, itm}],
-        'puts':  [{strike, last, iv, oi, delta, gamma, theta, vega, premium, itm}],
-        'underlying_price': float,
-        'expiry': str,
-    }
+
+    輸入：
+      ticker: str          — 股票代碼，例如 "AAPL"
+      expiration_date: str — 到期日，格式 "YYYY-MM-DD"
+    輸出：dict — {
+        "calls": list[dict],
+        "puts":  list[dict],
+        "underlying_price": float,
+        "expiry": str,
+      }
+      每個合約項含：{strike, last, iv, oi, delta, gamma, theta, vega, itm, intrinsic, premium}
     """
-    client = get_client()
+    client = _init_client()
     sym = _stock_to_underlying(ticker)
 
-    # 取得標的現價
+    underlying_price: float = 0.0
     try:
         ticker_resp = client.get_ticker(sym)
         underlying_price = float(ticker_resp.last.price)
-    except Exception:
-        underlying_price = 0.0
+    except Exception as e:
+        log.warning(f"[get_option_chain] 取得標的現價失敗：{e}")
 
-    # 取得期權合約列表
     try:
         resp = client.list_options_contracts(
             underlying_ticker=sym,
             expiration_date=expiration_date,
-            limit=500,
+            limit=1000,
         )
     except Exception as e:
-        log.error(f"取得期權合約列表失敗：{e}")
+        log.error(f"[get_option_chain] 取得期權合約列表失敗：{e}")
         return {"calls": [], "puts": [], "underlying_price": underlying_price, "expiry": expiration_date}
 
+    contracts = _to_contract_list(resp)
     calls, puts = [], []
-    for c in resp:
-        if not c:
+
+    for c in contracts:
+        if not c or not isinstance(c, dict):
             continue
-        strike = c.get("strike_price", 0)
-        itm = ""
-        if c.get("contract_type") == "call":
-            itm = "ITM" if underlying_price > strike else ("ATM" if underlying_price == strike else "OTM")
-            calls.append(_build_option_entry(c, underlying_price, itm))
-        elif c.get("contract_type") == "put":
-            itm = "ITM" if underlying_price < strike else ("ATM" if underlying_price == strike else "OTM")
-            puts.append(_build_option_entry(c, underlying_price, itm))
+        strike: float = float(c.get("strike_price") or 0)
+        ct: str = c.get("contract_type", "")
+        if ct == "call":
+            calls.append(_build_entry(c, underlying_price, strike))
+        elif ct == "put":
+            puts.append(_build_entry(c, underlying_price, strike))
 
     calls.sort(key=lambda x: x["strike"])
     puts.sort(key=lambda x: x["strike"])
-
-    log.info(f"{sym} {expiration_date} → {len(calls)} calls, {len(puts)} puts")
+    log.info(f"[get_option_chain] {sym} {expiration_date} → {len(calls)} calls, {len(puts)} puts")
     return {
         "calls": calls,
         "puts": puts,
@@ -129,70 +164,69 @@ def get_option_chain(ticker: str, expiration_date: str) -> dict:
     }
 
 
-def _build_option_entry(c: dict, underlying_price: float, itm: str) -> dict:
-    """將 Polygon 回應轉換為統一格式"""
-    strike = c.get("strike_price", 0)
-    last_price = c.get("last_trade_price") or c.get("last") or 0
-    iv = c.get("implied_volatility") or 0
-    oi = c.get("open_interest") or 0
-    delta = c.get("delta") or 0
-    gamma = c.get("gamma") or 0
-    theta = c.get("theta") or 0
-    vega = c.get("vega") or 0
-
-    # 估算權利金（內在價值 + IV 時間價值）
-    intrinsic = 0
-    contract_type = c.get("contract_type", "")
-    if contract_type == "call":
-        intrinsic = max(0, underlying_price - strike)
-    elif contract_type == "put":
-        intrinsic = max(0, strike - underlying_price)
-
+def _build_entry(c: dict, underlying_price: float, strike: float) -> dict:
+    """
+    將 Polygon 合約 dict 轉換為統一格式
+    輸入：c: dict, underlying_price: float, strike: float
+    輸出：dict — 含所有 Greeks + 報價欄位
+    """
+    last_price: float = float(c.get("last_trade_price") or c.get("last") or 0)
+    iv: float = float(c.get("implied_volatility") or 0)
+    oi: int = int(c.get("open_interest") or 0)
+    delta_val: float = float(c.get("delta") or 0)
+    gamma_val: float = float(c.get("gamma") or 0)
+    theta_val: float = float(c.get("theta") or 0)
+    vega_val: float = float(c.get("vega") or 0)
+    ct: str = c.get("contract_type", "")
+    itm = "ITM" if underlying_price > strike else ("OTM" if underlying_price < strike else "ATM")
+    intrinsic = max(0, underlying_price - strike) if ct == "call" else max(0, strike - underlying_price)
     return {
-        "strike": float(strike),
-        "last": float(last_price),
-        "iv": float(iv) * 100 if iv else 0,      # 轉為 %
-        "oi": int(oi) if oi else 0,
-        "delta": float(delta) if delta else 0,
-        "gamma": float(gamma) if gamma else 0,
-        "theta": float(theta) if theta else 0,
-        "vega": float(vega) if vega else 0,
+        "strike": strike,
+        "last": last_price,
+        "iv": round(iv * 100, 2),
+        "oi": oi,
+        "delta": round(delta_val, 4),
+        "gamma": round(gamma_val, 6),
+        "theta": round(theta_val, 4),
+        "vega": round(vega_val, 4),
         "itm": itm,
         "intrinsic": round(intrinsic, 2),
-        "premium": round(float(last_price) * 100, 2) if last_price else 0,  # 每手成本
+        "premium": round(last_price * 100, 2),
     }
 
 
-# ── 期權牆（OI Wall） ──
-
-def build_options_wall(ticker: str, expiration_date: str, threshold_strikes: int = 10) -> dict:
+def build_options_wall(ticker: str, expiration_date: str) -> dict:
     """
     構建期權牆（OI Wall）
-    分析每個行權價的未平倉量（Open Interest）分佈
-    找出OI最大的行權價（OI Wall）
+    輸入：ticker: str, expiration_date: str
+    輸出：dict — {
+        "ticker": str,
+        "expiry": str,
+        "underlying_price": float,
+        "atm_strike": float,
+        "oi_wall": dict | None,
+        "total_calls_oi": int,
+        "total_puts_oi": int,
+        "calls": list,
+        "puts": list,
+      }
     """
     chain = get_option_chain(ticker, expiration_date)
     underlying_price = chain.get("underlying_price", 0)
+    calls = chain.get("calls", [])
+    puts = chain.get("puts", [])
 
     all_oi = []
-    for c in chain.get("calls", []):
+    for c in calls:
         if c["oi"] > 0:
             all_oi.append({"strike": c["strike"], "oi": c["oi"], "type": "call"})
-    for p in chain.get("puts", []):
+    for p in puts:
         if p["oi"] > 0:
             all_oi.append({"strike": p["strike"], "oi": p["oi"], "type": "put"})
 
-    # 找到OI牆（最大OI的行權價）
-    oi_wall = max(all_oi, key=lambda x: x["oi"], default=None)
-
-    # 按行權價分組統計
-    calls_by_strike = {c["strike"]: c for c in chain.get("calls", [])}
-    puts_by_strike = {p["strike"]: p for p in chain.get("puts", [])}
-
-    all_strikes = sorted(set(list(calls_by_strike.keys()) + list(puts_by_strike.keys())))
-
-    # 找到現價附近的行權價
-    atm_strike = min(all_strikes, key=lambda s: abs(s - underlying_price)) if underlying_price and all_strikes else 0
+    oi_wall = max(all_oi, key=lambda x: x["oi"]) if all_oi else None
+    all_strikes = sorted({c["strike"] for c in calls} | {p["strike"] for p in puts})
+    atm_strike = float(min(all_strikes, key=lambda s: abs(s - underlying_price))) if underlying_price and all_strikes else 0.0
 
     return {
         "ticker": ticker.upper(),
@@ -200,9 +234,8 @@ def build_options_wall(ticker: str, expiration_date: str, threshold_strikes: int
         "underlying_price": underlying_price,
         "atm_strike": atm_strike,
         "oi_wall": oi_wall,
-        "calls": chain.get("calls", []),
-        "puts": chain.get("puts", []),
-        "all_strikes": all_strikes,
-        "total_calls_oi": sum(c["oi"] for c in chain.get("calls", [])),
-        "total_puts_oi": sum(p["oi"] for p in chain.get("puts", [])),
+        "total_calls_oi": sum(c["oi"] for c in calls),
+        "total_puts_oi": sum(p["oi"] for p in puts),
+        "calls": calls,
+        "puts": puts,
     }
