@@ -420,7 +420,7 @@ def main():
 
     # 讀取設定
     raw_cfg = load_config()
-    _, monitor_cfg, symbols_cfg = parse_config(raw_cfg)
+    monitor_cfg, symbols_cfg = parse_config(raw_cfg)
     monitor_interval = monitor_cfg.interval_minutes
     alert_mgr = AlertManager()
 

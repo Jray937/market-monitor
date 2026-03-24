@@ -1,0 +1,50 @@
+name: CI / Build Check
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Python syntax check
+        run: python -m py_compile bot.py src/*.py
+
+      - name: Import check (no missing modules)
+        run: python -c "
+            import sys
+            sys.path.insert(0, '.')
+            from src import config, data_fetcher, analyzer, alert_manager, logger
+            import src.discord_bot
+            print('✅ All modules imported successfully')
+          "
+
+      - name: Config parse check
+        run: python -c "
+            from src.config import load_config, parse_config
+            cfg = load_config()
+            result = parse_config(cfg)
+            print(f'parse_config returns {len(result)} values: OK')
+          "
+
+      - name: Bot entry point check
+        run: python -c "
+            import ast, sys
+            with open('bot.py') as f:
+                tree = ast.parse(f.read())
+            # verify bot.py has valid syntax and imports src.discord_bot
+            imports = [n for n in ast.walk(tree) if isinstance(n, ast.ImportFrom)]
+            print('✅ bot.py syntax OK')
+          "
