@@ -1,6 +1,5 @@
 [build]
-builder = "python"
+command = "pip install -r requirements.txt"
 
 [deploy]
 startCommand = "python bot.py"
-healthCheckPath = "/"
