@@ -7,11 +7,10 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Python 3.11
+      - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -19,42 +18,36 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Python syntax check
+      - name: Syntax check
         run: |
+          set -e
           python -m py_compile bot.py
-          python -m py_compile src/config.py
-          python -m py_compile src/data_fetcher.py
-          python -m py_compile src/analyzer.py
-          python -m py_compile src/alert_manager.py
-          python -m py_compile src/discord_bot.py
-          echo "All syntax OK"
+          for f in src/*.py; do python -m py_compile "$f"; done
+          echo "Syntax OK"
 
       - name: Import check
         run: |
-          python -c "
-            import sys; sys.path.insert(0, '.')
-            from src import config, data_fetcher, analyzer, alert_manager, logger
-            import src.discord_bot
-            print('All modules OK')
-          "
+          set -e
+          python << 'PYEOF'
+import sys
+sys.path.insert(0, '.')
+from src import config, data_fetcher, analyzer, alert_manager, logger
+import src.discord_bot
+print('All imports OK')
+PYEOF
 
-      - name: Config parse check (CI dummy env)
+      - name: Config parse check
         run: |
-          python -c "
-            import os, sys
-            sys.path.insert(0, '.')
-            os.environ['DISCORD_BOT_TOKEN'] = 'ci_dummy_token'
-            from src.config import load_config, parse_config
-            cfg = load_config()
-            result = parse_config(cfg)
-            print('parse_config returned', len(result), 'values: OK')
-          "
+          set -e
+          python << 'PYEOF'
+import os, sys
+sys.path.insert(0, '.')
+os.environ['DISCORD_BOT_TOKEN'] = 'ci_dummy'
+from src.config import load_config, parse_config
+cfg = load_config()
+result = parse_config(cfg)
+print('parse_config:', len(result), 'values OK')
+PYEOF
 
-      - name: Bot AST check
-        run: |
-          python -c "
-            import ast
-            with open('bot.py') as f:
-                tree = ast.parse(f.read())
-            print('bot.py syntax OK')
-          "
+      - name: Bot entry check
+        run: python -c "import ast; ast.parse(open('bot.py').read()); print('bot.py OK')"
