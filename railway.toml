@@ -1,0 +1,6 @@
+[build]
+builder = "python"
+
+[deploy]
+startCommand = "python bot.py"
+healthCheckPath = "/"
