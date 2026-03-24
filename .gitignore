@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+*.egg-info/
+
+# 運行時狀態（不上 Git）
+alert_state.json
+*.log
+
+# 環境變數
+.env
+.env.local
+
+# IDE
+.idea/
+.vscode/
+*.swp

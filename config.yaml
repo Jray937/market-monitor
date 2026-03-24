@@ -1,10 +1,12 @@
-telegram:
-  bot_token: "YOUR_BOT_TOKEN_HERE"
-  chat_id: "YOUR_CHAT_ID_HERE"
+# ─────────────────────────────────────────────
+# Market Monitor 設定檔
+# ⚠️ Token 請在 Railway 環境變數設定，不要寫在這裡
+# 環境變數：DISCORD_WEBHOOK_URL（必要）
+# ─────────────────────────────────────────────
 
 monitor:
-  interval_minutes: 15
-  summary_interval: 60
+  interval_minutes: 15    # 檢查間隔（分鐘）
+  summary_interval: 60    # 摘要報告間隔（分鐘）
 
 symbols:
   stocks:

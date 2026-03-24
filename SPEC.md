@@ -17,7 +17,7 @@
 | 語言 | Python 3.11+ |
 | 數據源 | Yahoo Finance (yfinance) — 完全免費 |
 | 技術分析 | pandas-ta（RSI, MACD, MA, BB） |
-| 通知 | python-telegram-bot v20 |
+| 通知 | Discord v20 |
 | 部署 | Railway / Render / VPS + Docker |
 | 定時任務 | APScheduler（境內輪詢） |
 
@@ -214,7 +214,7 @@ market-monitor/
 │   ├── data_fetcher.py       # yfinance 數據獲取
 │   ├── analyzer.py           # 技術指標計算（pandas-ta）
 │   ├── alert_manager.py       # 警報狀態 + 冷卻邏輯
-│   ├── telegram_bot.py        # Telegram 通知發送
+│   ├── discord_bot.py        # Telegram 通知發送
 │   └── logger.py              # 日誌設定
 └── run.sh                    # 本地啟動腳本
 ```
