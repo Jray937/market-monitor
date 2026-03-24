@@ -1,0 +1,13 @@
+version: "3.8"
+
+services:
+  market-monitor:
+    build: .
+    restart: unless-stopped
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+      - ./alert_state.json:/app/alert_state.json
+    environment:
+      - CONFIG_PATH=/app/config.yaml
+      - STATE_FILE=/app/alert_state.json
+    # Railway / Render 支援：直接 CMD

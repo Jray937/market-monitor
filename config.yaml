@@ -1,0 +1,75 @@
+telegram:
+  bot_token: "YOUR_BOT_TOKEN_HERE"
+  chat_id: "YOUR_CHAT_ID_HERE"
+
+monitor:
+  interval_minutes: 15
+  summary_interval: 60
+
+symbols:
+  stocks:
+    - symbol: "NVDA"
+      alerts:
+        - type: "rsi_oversold"
+          threshold: 30
+          cooldown_hours: 6
+        - type: "rsi_overbought"
+          threshold: 70
+          cooldown_hours: 6
+        - type: "macd_cross_up"
+          cooldown_hours: 6
+        - type: "price_cross_ma200"
+          cooldown_hours: 12
+    - symbol: "TSLA"
+      alerts:
+        - type: "rsi_overbought"
+          threshold: 70
+          cooldown_hours: 6
+        - type: "macd_cross_down"
+          cooldown_hours: 6
+    - symbol: "AAPL"
+      alerts:
+        - type: "macd_cross_up"
+          cooldown_hours: 6
+        - type: "price_cross_ma200"
+          cooldown_hours: 12
+    - symbol: "SPY"
+      alerts:
+        - type: "price_cross_ma200"
+          cooldown_hours: 12
+    - symbol: "QQQ"
+      alerts:
+        - type: "rsi_overbought"
+          threshold: 70
+          cooldown_hours: 6
+
+  crypto:
+    - symbol: "BTC-USD"
+      alerts:
+        - type: "rsi_oversold"
+          threshold: 30
+          cooldown_hours: 4
+        - type: "rsi_overbought"
+          threshold: 70
+          cooldown_hours: 4
+        - type: "bollinger_lower"
+          cooldown_hours: 6
+        - type: "bollinger_upper"
+          cooldown_hours: 6
+    - symbol: "ETH-USD"
+      alerts:
+        - type: "rsi_oversold"
+          threshold: 30
+          cooldown_hours: 4
+        - type: "rsi_overbought"
+          threshold: 70
+          cooldown_hours: 4
+        - type: "macd_cross_up"
+          cooldown_hours: 6
+    - symbol: "SOL-USD"
+      alerts:
+        - type: "rsi_oversold"
+          threshold: 30
+          cooldown_hours: 4
+        - type: "macd_cross_up"
+          cooldown_hours: 6
