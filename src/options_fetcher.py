@@ -46,7 +46,7 @@ def get_option_expirations(ticker: str) -> list[dict]:
             limit=100,
         )
         expirations = {}
-        for c in resp.results:
+        for c in resp:
             if c and c.get("expiration_date"):
                 exp = c["expiration_date"]
                 if exp not in expirations:
@@ -105,7 +105,7 @@ def get_option_chain(ticker: str, expiration_date: str) -> dict:
         return {"calls": [], "puts": [], "underlying_price": underlying_price, "expiry": expiration_date}
 
     calls, puts = [], []
-    for c in resp.results:
+    for c in resp:
         if not c:
             continue
         strike = c.get("strike_price", 0)
