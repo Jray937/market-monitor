@@ -391,7 +391,10 @@ def run_leader_bot(bot_token: str, team_channel_id: int, user_channel_id: int = 
             return
 
         is_dm = isinstance(message.channel, discord.DMChannel)
-        is_mentioned = client.user in message.mentions
+
+        # 用 ID 比對 mention，更可靠
+        mention_ids = {int(m.id) for m in message.mentions}
+        is_mentioned = client.user.id in mention_ids
 
         if not (is_dm or is_mentioned):
             return
