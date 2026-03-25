@@ -166,17 +166,23 @@ async def call_minimax(
     model = os.environ.get("MINIMAX_MODEL", "MiniMax-M2.7")
 
     try:
-        client = anthropic.Anthropic(
+        client = anthropic.AsyncAnthropic(
             api_key=api_key,
             base_url=base_url,
         )
-        response = client.messages.create(
+        response = await client.messages.create(
             model=model,
             max_tokens=max_tokens,
             system=system_prompt,
             messages=[{"role": "user", "content": user_message}],
         )
-        return response.content[0].text if response.content else "⚠️ 無回應"
+        if not response.content:
+            return "⚠️ 無回應"
+        # 按官方文件：用 block.type 區分 thinking / text / tool_use
+        for block in response.content:
+            if block.type == "text":
+                return block.text
+        return "⚠️ 無回應"
     except Exception as e:
         log.error(f"❌ MiniMax API 錯誤：{e}")
         return "⚠️ 分析失敗"
