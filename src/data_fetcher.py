@@ -62,6 +62,75 @@ def fetch_current_price(symbol: str) -> float | None:
     return None
 
 
+def fetch_stock_info(symbol: str) -> dict | None:
+    """獲取股票基本面資訊（yfinance ticker.info）"""
+    try:
+        ticker = yf.Ticker(symbol)
+        info = ticker.info
+        if not info or not info.get("shortName"):
+            return None
+        return {
+            "name": info.get("shortName", ""),
+            "sector": info.get("sector", ""),
+            "industry": info.get("industry", ""),
+            "market_cap": info.get("marketCap"),
+            "pe_ratio": info.get("trailingPE"),
+            "forward_pe": info.get("forwardPE"),
+            "pb_ratio": info.get("priceToBook"),
+            "ps_ratio": info.get("priceToSalesTrailing12Months"),
+            "dividend_yield": info.get("dividendYield"),
+            "revenue": info.get("totalRevenue"),
+            "revenue_growth": info.get("revenueGrowth"),
+            "profit_margin": info.get("profitMargins"),
+            "operating_margin": info.get("operatingMargins"),
+            "debt_to_equity": info.get("debtToEquity"),
+            "current_ratio": info.get("currentRatio"),
+            "roe": info.get("returnOnEquity"),
+            "free_cashflow": info.get("freeCashflow"),
+            "52w_high": info.get("fiftyTwoWeekHigh"),
+            "52w_low": info.get("fiftyTwoWeekLow"),
+            "avg_volume": info.get("averageVolume"),
+            "beta": info.get("beta"),
+            "target_price": info.get("targetMeanPrice"),
+            "recommendation": info.get("recommendationKey"),
+            "num_analysts": info.get("numberOfAnalystOpinions"),
+        }
+    except Exception as e:
+        log.error(f"❌ 獲取 {symbol} 基本面失敗：{e}")
+        return None
+
+
+def fetch_news(symbol: str, max_items: int = 5) -> list[dict] | None:
+    """獲取近期新聞（yfinance ticker.news）"""
+    try:
+        ticker = yf.Ticker(symbol)
+        news = ticker.news
+        if not news:
+            return None
+        results = []
+        for item in news[:max_items]:
+            title = item.get("title", "")
+            publisher = item.get("publisher", "")
+            publish_time = item.get("providerPublishTime")
+            time_str = ""
+            if publish_time:
+                try:
+                    import datetime as dt
+                    time_str = dt.datetime.fromtimestamp(publish_time).strftime("%m/%d %H:%M")
+                except Exception:
+                    pass
+            if title:
+                results.append({
+                    "title": title,
+                    "publisher": publisher,
+                    "time": time_str,
+                })
+        return results if results else None
+    except Exception as e:
+        log.error(f"❌ 獲取 {symbol} 新聞失敗：{e}")
+        return None
+
+
 def is_market_open() -> bool:
     import datetime as dt
     now_utc = dt.datetime.utcnow()

@@ -27,7 +27,7 @@ from typing import Optional
 
 # ── 本地模組 ──
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from src.data_fetcher import fetch_ohlcv
+from src.data_fetcher import fetch_ohlcv, fetch_stock_info, fetch_news
 from src.analyzer import compute_ta
 
 # ── 日誌 ──
@@ -43,72 +43,109 @@ TEAM_AGENTS = {
         "name": "交易員",
         "emoji": "📊",
         "focus": "技術分析、進出场點位",
-        "system_prompt": """你是一位專業的交易員，專注於短線和波段交易。
-當收到分析任務時，請根據技術指標數據給出：
-1. 趨勢判斷（多頭/空頭/震盪）
-2. 關鍵支撐阻力位
-3. 進場/止損/目標價建議
-4. 持有時間框架
-保持簡潔，專業，給出具體數字。""",
+        "system_prompt": """你是一位專業的短線/波段交易員。你必須自主完成分析，絕不向用戶索要任何數據。
+
+你的工作方式：
+- 如果收到技術指標數據，直接基於數據分析
+- 如果沒有數據，根據你對該標的的專業知識（歷史走勢、常見支撐阻力、近期市場狀況）給出你的最佳判斷
+- 永遠不要說「請提供數據」「需要更多信息」「建議查看」之類的話，你是專業交易員，必須給出明確觀點
+
+輸出要求：
+1. 趨勢判斷（多頭/空頭/震盪）+ 理由
+2. 關鍵支撐位和阻力位（給出具體價格）
+3. 進場點 / 止損位 / 目標價
+4. 建議持倉時間框架
+簡潔、專業、給具體數字，不要模棱兩可。""",
     },
     "sector_analyst": {
         "name": "行業研究員",
         "emoji": "📈",
         "focus": "基本面、行業、估值",
-        "system_prompt": """你是一位資深的行業研究分析師。
-當收到分析任務時，請根據技術指標數據給出：
-1. 基本面簡評
-2. 估值判斷（貴/合理/便宜）
-3. 投資評級（買入/持有/減持）
-4. 主要風險
-保持簡潔，專業，有數據支撐。""",
+        "system_prompt": """你是一位資深行業研究分析師。你必須自主完成分析，絕不向用戶索要任何數據。
+
+你的工作方式：
+- 基於你掌握的公司基本面知識（營收、利潤、競爭格局、行業趨勢）進行分析
+- 如果收到技術數據作為補充參考，可以結合使用，但你的核心是基本面判斷
+- 永遠不要說「需要財報數據」「建議查閱」「請提供」之類的話，你是資深研究員，必須基於已有知識給出判斷
+
+輸出要求：
+1. 公司/行業基本面評估（護城河、成長性、競爭力）
+2. 估值判斷（偏貴/合理/便宜）+ 估值依據
+3. 明確投資評級（強烈買入/買入/持有/減持/賣出）
+4. 核心風險點（具體列出2-3個）
+簡潔、專業，有自己的觀點立場。""",
     },
     "macro_strategist": {
         "name": "宏觀策略師",
         "emoji": "🌍",
         "focus": "宏觀經濟、政策影響",
-        "system_prompt": """你是一位頂級的宏觀經濟策略分析師。
-當收到分析任務時，請給出：
-1. 宏觀背景分析
-2. 板塊順風/逆風因素
-3. 利率、通脹、政策影響
-4. 主要風險情景
-保持簡潔，有大局觀。""",
+        "system_prompt": """你是一位頂級宏觀經濟策略師。你必須自主完成分析，絕不向用戶索要任何數據。
+
+你的工作方式：
+- 基於你對全球宏觀經濟的深入理解（利率週期、通脹趨勢、央行政策、地緣政治）進行分析
+- 將宏觀環境與具體標的/板塊結合，給出有操作意義的結論
+- 永遠不要說「需要更多宏觀數據」「建議關注」之類的模糊話，你是頂級策略師，必須給出明確的宏觀研判
+
+輸出要求：
+1. 當前宏觀環境定性（擴張/收縮/轉折點）
+2. 對該標的/板塊的順風和逆風因素（具體列出）
+3. 利率、通脹、政策的影響路徑
+4. 最可能的風險情景及概率判斷
+簡潔、有大局觀，結論明確。""",
     },
     "intelligence_officer": {
         "name": "情報官",
         "emoji": "📰",
         "focus": "新聞、情緒、消息面",
-        "system_prompt": """你是一位敏銳的市場情報分析師。
-當收到分析任務時，請根據技術指標給出：
-1. 近期重要新聞觀察
-2. 市場情緒判斷
-3. 信息面風險和機會
-保持簡潔，敏銳，注重事實。""",
+        "system_prompt": """你是一位敏銳的市場情報分析師。你必須自主完成分析，絕不向用戶索要任何信息。
+
+你的工作方式：
+- 基於你掌握的近期市場新聞、事件、輿論動態進行情報分析
+- 綜合判斷市場情緒（貪婪/恐懼/觀望）並給出依據
+- 永遠不要說「需要查看新聞」「建議關注消息」之類的話，你是情報官，必須直接提供你的情報研判
+
+輸出要求：
+1. 近期關鍵新聞/事件梳理（列出2-3個最重要的）
+2. 市場情緒判斷（極度恐懼/恐懼/中性/貪婪/極度貪婪）+ 依據
+3. 消息面的主要風險和機會
+4. 未來1-2週需要關注的催化劑事件
+簡潔、敏銳，注重事實，不要空泛。""",
     },
     "risk_officer": {
         "name": "風控官",
         "emoji": "⚠️",
         "focus": "風險評估、倉位建議",
-        "system_prompt": """你是一位嚴格的風險控制專家。
-當收到分析任務時，請根據技術指標給出：
-1. 波動率風險評估
-2. 下行空間分析
-3. 合理倉位建議
-4. 風險預警
-保持簡潔，直接，注重風險。""",
+        "system_prompt": """你是一位嚴格的風險控制專家。你必須自主完成風險評估，絕不向用戶索要任何數據。
+
+你的工作方式：
+- 基於你對標的的波動特性、歷史回撤、相關性風險的理解進行評估
+- 如果收到技術數據，結合數據評估；如果沒有，基於經驗和專業知識評估
+- 永遠不要說「需要倉位信息」「請提供持倉」之類的話，你是風控專家，必須基於合理假設給出風控建議
+
+輸出要求：
+1. 波動率風險等級（低/中/高/極高）+ 依據
+2. 最大下行風險估算（具體百分比或金額）
+3. 建議倉位比例（佔總資金的百分比）
+4. 具體風險預警（止損線、需要減倉的信號）
+簡潔、直接、保守，寧可高估風險也不低估。""",
     },
     "quant_strategist": {
         "name": "量化策略師",
         "emoji": "🔢",
         "focus": "量化信號、統計分析",
-        "system_prompt": """你是一位量化投資策略師。
-當收到分析任務時，請根據技術指標給出：
-1. 量化視角分析
-2. 統計規律識別
-3. 動量和趨勢強度
-4. 量化信號評分
-保持簡潔，數據驅動。""",
+        "system_prompt": """你是一位量化投資策略師。你必須自主完成量化分析，絕不向用戶索要任何數據。
+
+你的工作方式：
+- 如果收到技術指標數據，基於數據進行量化分析（RSI、MACD、布林帶等信號解讀）
+- 如果沒有數據，基於該標的的歷史統計特性（波動率、均值回歸特性、動量特性）給出量化視角
+- 永遠不要說「需要歷史數據」「建議回測」之類的話，你是量化策略師，必須直接給出你的量化研判
+
+輸出要求：
+1. 量化信號評分（-100到+100，負為空頭信號，正為多頭信號）
+2. 關鍵技術指標解讀（如有數據）或統計規律分析（如無數據）
+3. 動量強度和趨勢持續性判斷
+4. 量化建議（做多/做空/觀望）+ 置信度
+簡潔、數據驅動，結論明確。""",
     },
 }
 
@@ -125,6 +162,8 @@ STATE_TIMEOUT    = "❌ 接收超時"
 STATE_PROCESSING = "🔄 處理中"
 STATE_DONE       = "✅ 完成"
 STATE_ERROR      = "⚠️ 錯誤"
+
+ACK_MARKER       = "已接收任務"       # Agent 確認訊息標記
 
 # ══════════════════════════════════════════════════════════════
 # 工具函式
@@ -221,6 +260,138 @@ def get_ta_summary(symbol: str) -> Optional[str]:
     except Exception as e:
         log.error(f"❌ 獲取 {symbol} 技術數據失敗：{e}")
         return None
+
+
+def _fmt_number(val, prefix="", suffix="", decimal=2):
+    """格式化數字，支援大數簡寫"""
+    if val is None:
+        return None
+    if isinstance(val, (int, float)):
+        if abs(val) >= 1e12:
+            return f"{prefix}{val/1e12:.{decimal}f}T{suffix}"
+        if abs(val) >= 1e9:
+            return f"{prefix}{val/1e9:.{decimal}f}B{suffix}"
+        if abs(val) >= 1e6:
+            return f"{prefix}{val/1e6:.{decimal}f}M{suffix}"
+        return f"{prefix}{val:.{decimal}f}{suffix}"
+    return str(val)
+
+
+def fmt_fundamentals(info: dict) -> str:
+    """將基本面數據格式化為可讀文字"""
+    parts = []
+    if info.get("name"):
+        sector = f"（{info['sector']} / {info['industry']}）" if info.get("sector") else ""
+        parts.append(f"🏢 公司：{info['name']}{sector}")
+    if info.get("market_cap"):
+        parts.append(f"💰 市值：{_fmt_number(info['market_cap'], prefix='$')}")
+    if info.get("pe_ratio"):
+        fwd = f" / 預估PE {info['forward_pe']:.1f}" if info.get("forward_pe") else ""
+        parts.append(f"📊 PE（TTM）：{info['pe_ratio']:.1f}{fwd}")
+    if info.get("pb_ratio"):
+        parts.append(f"📊 PB：{info['pb_ratio']:.2f}")
+    if info.get("ps_ratio"):
+        parts.append(f"📊 PS：{info['ps_ratio']:.2f}")
+    if info.get("revenue"):
+        growth = f"（YoY {info['revenue_growth']:+.1%}）" if info.get("revenue_growth") is not None else ""
+        parts.append(f"💵 營收：{_fmt_number(info['revenue'], prefix='$')}{growth}")
+    if info.get("profit_margin") is not None:
+        parts.append(f"📈 利潤率：{info['profit_margin']:.1%}")
+    if info.get("operating_margin") is not None:
+        parts.append(f"📈 營業利潤率：{info['operating_margin']:.1%}")
+    if info.get("roe") is not None:
+        parts.append(f"📈 ROE：{info['roe']:.1%}")
+    if info.get("debt_to_equity") is not None:
+        parts.append(f"⚠️ 負債/權益比：{info['debt_to_equity']:.1f}")
+    if info.get("free_cashflow"):
+        parts.append(f"💵 自由現金流：{_fmt_number(info['free_cashflow'], prefix='$')}")
+    if info.get("dividend_yield") is not None and info["dividend_yield"] > 0:
+        parts.append(f"💰 股息率：{info['dividend_yield']:.2%}")
+    if info.get("beta") is not None:
+        parts.append(f"📐 Beta：{info['beta']:.2f}")
+    if info.get("52w_high") and info.get("52w_low"):
+        parts.append(f"📏 52週區間：${info['52w_low']:.2f} ~ ${info['52w_high']:.2f}")
+    if info.get("target_price"):
+        rec = f"（分析師評級：{info['recommendation']}）" if info.get("recommendation") else ""
+        analysts = f"（{info['num_analysts']}位分析師）" if info.get("num_analysts") else ""
+        parts.append(f"🎯 目標價：${info['target_price']:.2f}{rec}{analysts}")
+    return "\n".join(parts) if parts else ""
+
+
+def fmt_news(news_list: list[dict]) -> str:
+    """將新聞列表格式化為可讀文字"""
+    if not news_list:
+        return ""
+    parts = []
+    for i, item in enumerate(news_list, 1):
+        src = f" ({item['publisher']})" if item.get("publisher") else ""
+        time_str = f" [{item['time']}]" if item.get("time") else ""
+        parts.append(f"{i}. {item['title']}{src}{time_str}")
+    return "\n".join(parts)
+
+
+def gather_agent_context(agent_key: str, symbol: str | None) -> str:
+    """根據 Agent 角色主動抓取最相關的數據，打包成上下文字串"""
+    if not symbol:
+        return ""
+
+    sections = []
+
+    # Agent 角色 → 需要的數據類型
+    AGENT_DATA_NEEDS = {
+        "trader":               {"ta": True,  "fundamentals": False, "news": False, "risk": True},
+        "sector_analyst":       {"ta": False, "fundamentals": True,  "news": True,  "risk": False},
+        "macro_strategist":     {"ta": False, "fundamentals": True,  "news": True,  "risk": False},
+        "intelligence_officer": {"ta": False, "fundamentals": False, "news": True,  "risk": False},
+        "risk_officer":         {"ta": True,  "fundamentals": True,  "news": False, "risk": True},
+        "quant_strategist":     {"ta": True,  "fundamentals": True,  "news": False, "risk": True},
+    }
+    needs = AGENT_DATA_NEEDS.get(agent_key, {"ta": True, "fundamentals": True, "news": True, "risk": False})
+
+    # ── 技術數據 ──
+    ta_data = None
+    if needs["ta"]:
+        ta_data = get_ta_summary(symbol)
+        if ta_data:
+            sections.append(f"【技術分析數據】\n{ta_data}")
+
+    # ── 基本面數據 ──
+    info = None
+    if needs["fundamentals"]:
+        info = fetch_stock_info(symbol)
+        if info:
+            fundamentals_text = fmt_fundamentals(info)
+            if fundamentals_text:
+                sections.append(f"【基本面數據】\n{fundamentals_text}")
+
+    # ── 風險指標（需要基本面數據支撐）──
+    if needs["risk"]:
+        if info is None:
+            info = fetch_stock_info(symbol)
+        if info:
+            risk_parts = []
+            if info.get("beta") is not None:
+                risk_parts.append(f"Beta：{info['beta']:.2f}")
+            if info.get("52w_high") and info.get("52w_low") and info["52w_low"] > 0:
+                range_pct = (info["52w_high"] - info["52w_low"]) / info["52w_low"] * 100
+                risk_parts.append(f"52週波幅：{range_pct:.1f}%")
+            if info.get("debt_to_equity") is not None:
+                risk_parts.append(f"負債/權益比：{info['debt_to_equity']:.1f}")
+            if risk_parts:
+                sections.append(f"【風險指標】\n" + "\n".join(risk_parts))
+
+    # ── 新聞數據 ──
+    if needs["news"]:
+        news = fetch_news(symbol)
+        if news:
+            news_text = fmt_news(news)
+            if news_text:
+                sections.append(f"【近期新聞】\n{news_text}")
+
+    if not sections:
+        return ""
+
+    return "\n\n".join(sections)
 
 
 # ══════════════════════════════════════════════════════════════
@@ -412,15 +583,24 @@ def run_leader_bot(bot_token: str, team_channel_id: int, user_channel_id: int = 
                 task = pending_tasks[task_id]
                 agent_key = AGENT_NAME_TO_KEY.get(agent_name)
                 if agent_key and agent_key in task.agent_states:
-                    # 標記為處理中 → 完成
-                    if task.agent_states[agent_key] not in (STATE_DONE, STATE_TIMEOUT, STATE_ERROR):
-                        task.agent_states[agent_key] = STATE_PROCESSING
-                        await update_user_status(task)
-                        task.reports.append((agent_name, report_text))
-                        await asyncio.sleep(0.5)
-                        task.agent_states[agent_key] = STATE_DONE
-                        await update_user_status(task)
-                        log.info(f"📥 Leader 收到 {agent_name} 報告（{task_id}）")
+                    # 區分「已接收確認」和「正式報告」
+                    is_ack = ACK_MARKER in report_text
+                    if is_ack:
+                        # 確認收到，只更新狀態，不加入 reports
+                        if task.agent_states[agent_key] == STATE_SENT:
+                            task.agent_states[agent_key] = STATE_RECEIVED
+                            await update_user_status(task)
+                            log.info(f"✅ Leader 確認 {agent_name} 已接收（{task_id}）")
+                    else:
+                        # 正式報告：標記為處理中 → 完成
+                        if task.agent_states[agent_key] not in (STATE_DONE, STATE_TIMEOUT, STATE_ERROR):
+                            task.agent_states[agent_key] = STATE_PROCESSING
+                            await update_user_status(task)
+                            task.reports.append((agent_name, report_text))
+                            await asyncio.sleep(0.5)
+                            task.agent_states[agent_key] = STATE_DONE
+                            await update_user_status(task)
+                            log.info(f"📥 Leader 收到 {agent_name} 報告（{task_id}）")
             return
 
         # ── 用戶頻道：接收需求 ──
@@ -551,11 +731,10 @@ def run_leader_bot(bot_token: str, team_channel_id: int, user_channel_id: int = 
     async def summarize_and_reply(task):
         reports = task.reports
 
-        # 最終狀態
+        # 最終狀態：未完成的 Agent 標記為超時
         for key in task.dispatch_agents:
-            if task.agent_states[key] not in (STATE_DONE,):
-                if task.agent_states[key] == STATE_SENT:
-                    task.agent_states[key] = STATE_TIMEOUT
+            if task.agent_states[key] != STATE_DONE:
+                task.agent_states[key] = STATE_TIMEOUT
         await update_user_status(task)
         await asyncio.sleep(1)
 
@@ -783,30 +962,31 @@ def run_team_agent_bot(bot_token: str, agent_key: str, team_channel_id: int):
 
         # 回傳已接收確認
         await message.channel.send(
-            f"[{agent['name']}] {task_id} ✅ 已接收任務，開始分析..."
+            f"[{agent['name']}] {task_id} ✅ {ACK_MARKER}，開始分析..."
         )
 
         # 嘗試從任務描述中提取標的
         symbol_match = re.search(r'\b([A-Z]{2,5}(?:-USD)?)\b', task_desc or "")
         symbol = symbol_match.group(1) if symbol_match else None
 
-        ta_data = None
-        if symbol:
-            ta_data = get_ta_summary(symbol)
+        # 根據 Agent 角色主動抓取相關數據
+        log.info(f"🔍 {agent['name']} 正在為 {symbol or '(無標的)'} 抓取數據...")
+        context_data = gather_agent_context(agent_key, symbol)
 
         # 構造分析消息
-        if ta_data:
+        if context_data:
             user_msg = f"""{task_desc}
 
-參考數據：
-{ta_data}
+以下是我為你抓取的即時市場數據：
 
-請根據你的專業領域，提供針對性的分析。保持簡潔、專業、有數據支撐。"""
+{context_data}
+
+請基於以上數據和你的專業知識，直接給出你的分析結論。不要索要額外數據，不要說「建議查看」，直接給出明確判斷。"""
         else:
             user_msg = f"""{task_desc}
 
-請根據你的專業領域，提供深入分析。如果需要特定市場數據，請說明。
-保持簡潔、專業、有數據支撐。"""
+目前無法獲取該標的的即時數據，但你是專業分析師，請基於你的專業知識和經驗，直接給出你的分析和判斷。
+不要索要任何數據，不要推諉，不要說「需要更多信息」，直接給出你能提供的最佳分析。"""
 
         async with message.channel.typing():
             report = await call_minimax(agent["system_prompt"], user_msg)
@@ -829,12 +1009,12 @@ def run_team_agent_bot(bot_token: str, agent_key: str, team_channel_id: int):
     @app_commands.describe(symbol="股票代碼")
     async def cmd_test(interaction: discord.Interaction, symbol: str):
         await interaction.response.defer()
-        ta_data = get_ta_summary(symbol.upper())
-        if not ta_data:
-            await interaction.followup.send(f"⚠️ 無法取得 {symbol} 數據")
+        context_data = gather_agent_context(agent_key, symbol.upper())
+        if not context_data:
+            await interaction.followup.send(f"⚠️ 無法取得 {symbol} 任何數據")
             return
 
-        user_msg = f"請分析 {symbol}。\n\n參考數據：\n{ta_data}"
+        user_msg = f"請分析 {symbol}。\n\n{context_data}"
         report = await call_minimax(agent["system_prompt"], user_msg)
 
         embed = make_embed(
