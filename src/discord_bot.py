@@ -170,11 +170,37 @@ ACK_MARKER       = "已接收任務"       # Agent 確認訊息標記
 # ══════════════════════════════════════════════════════════════
 
 def make_embed(title, description="", color=0x7289DA, fields=None, footer=None):
+    # Discord embed limits
+    TITLE_MAX      = 256
+    DESC_MAX       = 4096
+    FIELD_NAME_MAX = 256
+    FIELD_VAL_MAX  = 1024
+    FOOTER_MAX     = 2048
+    TOTAL_MAX      = 6000
+    MIN_FIELD_LEN  = 20
+
+    title       = (title or "")[:TITLE_MAX]
+    description = (description or "")[:DESC_MAX]
+    footer_text = (footer or "")[:FOOTER_MAX]
+
     embed = discord.Embed(title=title, description=description, color=color)
+    total = len(title) + len(description) + len(footer_text)
+
     for f in (fields or []):
-        embed.add_field(name=f["name"], value=f["value"], inline=f.get("inline", False))
-    if footer:
-        embed.set_footer(text=footer)
+        fname = f["name"][:FIELD_NAME_MAX]
+        fval  = f["value"][:FIELD_VAL_MAX]
+        cost  = len(fname) + len(fval)
+        if total + cost > TOTAL_MAX:
+            remaining = TOTAL_MAX - total - len(fname) - 1
+            if remaining > MIN_FIELD_LEN:
+                fval = fval[:remaining] + "…"
+            else:
+                break
+        total += len(fname) + len(fval)
+        embed.add_field(name=fname, value=fval, inline=f.get("inline", False))
+
+    if footer_text:
+        embed.set_footer(text=footer_text)
     embed.timestamp = datetime.datetime.utcnow()
     return embed
 
@@ -705,50 +731,45 @@ def run_leader_bot(bot_token: str, team_channel_id: int, user_channel_id: int = 
         asyncio.create_task(monitor_task(task, client))
 
     async def monitor_task(task, client):
-        start = time.time()
-        receive_deadline = start + task.receive_timeout
-        process_deadline = start + task.receive_timeout + task.process_timeout
+        try:
+            start = time.time()
+            receive_deadline = start + task.receive_timeout
+            process_deadline = start + task.receive_timeout + task.process_timeout
 
-        while time.time() < process_deadline:
-            await asyncio.sleep(5)
+            while time.time() < process_deadline:
+                await asyncio.sleep(5)
 
-            if time.time() > receive_deadline:
-                for key in task.dispatch_agents:
-                    if task.agent_states[key] == STATE_SENT:
-                        task.agent_states[key] = STATE_TIMEOUT
+                if time.time() > receive_deadline:
+                    for key in task.dispatch_agents:
+                        if task.agent_states[key] == STATE_SENT:
+                            task.agent_states[key] = STATE_TIMEOUT
 
-            all_done = all(
-                task.agent_states[key] in (STATE_DONE, STATE_TIMEOUT, STATE_ERROR)
-                for key in task.dispatch_agents
-            )
-            if all_done:
-                break
+                all_done = all(
+                    task.agent_states[key] in (STATE_DONE, STATE_TIMEOUT, STATE_ERROR)
+                    for key in task.dispatch_agents
+                )
+                if all_done:
+                    break
 
-        if task.task_id in pending_tasks:
-            pending_tasks.pop(task.task_id)
-            await summarize_and_reply(task)
+            if task.task_id in pending_tasks:
+                pending_tasks.pop(task.task_id)
+                await summarize_and_reply(task)
+        except Exception as e:
+            log.error(f"❌ monitor_task 異常：{e}")
 
     async def summarize_and_reply(task):
         reports = task.reports
+        MSG_MAX = 2000  # Discord 訊息上限
 
         # 最終狀態：未完成的 Agent 標記為超時
         for key in task.dispatch_agents:
             if task.agent_states[key] != STATE_DONE:
                 task.agent_states[key] = STATE_TIMEOUT
-        await update_user_status(task)
+        try:
+            await update_user_status(task)
+        except Exception:
+            pass
         await asyncio.sleep(1)
-
-        # 建構最終報告
-        fields = []
-        for key in task.dispatch_agents:
-            ag = TEAM_AGENTS[key]
-            state = task.agent_states.get(key, STATE_TIMEOUT)
-            report_text = next((r for n, r in reports if n == ag["name"]), "（無報告）")
-            fields.append({
-                "name": f"{ag['emoji']} {ag['name']} {state}",
-                "value": report_text[:1024] if len(report_text) > 10 else state,
-                "inline": False,
-            })
 
         # LLM 彙總結論
         conclusion = ""
@@ -762,23 +783,85 @@ def run_leader_bot(bot_token: str, team_channel_id: int, user_channel_id: int = 
                 max_tokens=128,
             )
 
+        # 建構最終報告 — 動態計算 field 預算，確保不超過 Discord 6000 字元上限
+        EMBED_TOTAL_MAX = 6000
+        EMBED_STRUCTURE_OVERHEAD = 50       # JSON 結構與時間戳等額外開銷
+        FIELD_NAME_ESTIMATE = 40            # emoji + agent name + state ≈ 40 字元
+
+        title_text = f"🎯 分析報告（{len(reports)}/{len(task.dispatch_agents)} 位成員回覆）"
+        desc_text = (
+            f"📌 任務：{task.dispatch_task[:200]}\n\n"
+            f"⏱ 耗時：{int(time.time() - task.created_at)}秒\n\n"
+            + (f"📝 結論：{conclusion}\n\n" if conclusion else "")
+        )
+        footer_text = "Market Monitor Agent Team"
+
+        # 計算 field 可用預算
+        overhead = len(title_text) + len(desc_text) + len(footer_text) + EMBED_STRUCTURE_OVERHEAD
+        n_agents = max(len(task.dispatch_agents), 1)
+        per_field_val_max = min(1024, max(100, (EMBED_TOTAL_MAX - overhead - n_agents * FIELD_NAME_ESTIMATE) // n_agents))
+
+        fields = []
+        for key in task.dispatch_agents:
+            ag = TEAM_AGENTS[key]
+            state = task.agent_states.get(key, STATE_TIMEOUT)
+            report_text = next((r for n, r in reports if n == ag["name"]), "（無報告）")
+            if len(report_text) <= 10:
+                value = state
+            elif len(report_text) > per_field_val_max:
+                value = report_text[:per_field_val_max - 1] + "…"
+            else:
+                value = report_text
+            fields.append({
+                "name": f"{ag['emoji']} {ag['name']} {state}",
+                "value": value,
+                "inline": False,
+            })
+
         embed = make_embed(
-            title=f"🎯 分析報告（{len(reports)}/{len(task.dispatch_agents)} 位成員回覆）",
-            description=(
-                f"📌 任務：{task.dispatch_task}\n\n"
-                f"⏱ 耗時：{int(time.time() - task.created_at)}秒\n\n"
-                + (f"📝 結論：{conclusion}\n\n" if conclusion else "")
-            ),
+            title=title_text,
+            description=desc_text,
             color=0x00C851,
-            footer="Market Monitor Agent Team",
+            footer=footer_text,
             fields=fields,
         )
 
-        try:
-            await task.status_msg.edit(embed=embed)
-        except Exception as e:
-            log.error(f"❌ 發送最終報告失敗：{e}")
-            await task.user_channel.send(embed=embed)
+        # ── 發送最終報告，逐層降級：edit(重試) → send embed → send 純文字 ──
+        sent = False
+
+        # 嘗試 1：編輯原始狀態訊息（含一次重試，應對瞬態 500）
+        for attempt in range(2):
+            try:
+                await task.status_msg.edit(embed=embed)
+                sent = True
+                break
+            except Exception as e:
+                log.warning(f"⚠️ edit 最終報告失敗（第{attempt+1}次）：{e}")
+                if attempt == 0:
+                    await asyncio.sleep(2)
+
+        # 嘗試 2：重新發送 embed 到用戶頻道
+        if not sent:
+            try:
+                await task.user_channel.send(embed=embed)
+                sent = True
+            except Exception as e:
+                log.warning(f"⚠️ send embed 失敗：{e}")
+
+        # 嘗試 3：回退為純文字分段發送
+        if not sent:
+            try:
+                fallback = f"**{title_text}**\n{desc_text}"
+                for f in fields:
+                    fallback += f"\n**{f['name']}**\n{f['value'][:500]}\n"
+                for chunk_start in range(0, len(fallback), MSG_MAX):
+                    await task.user_channel.send(fallback[chunk_start:chunk_start + MSG_MAX])
+                sent = True
+            except Exception as e:
+                log.error(f"❌ 純文字回退也失敗：{e}")
+
+        if not sent:
+            log.error(f"❌ 任務 {task.task_id} 最終報告無法發送")
 
     # 斜線命令
     @tree.command(name="幫助", description="顯示使用說明")
