@@ -138,8 +138,8 @@ async def monitor_job():
             if r:
                 results.append(r)
 
-    # 每小時摘要（每4輪發一次）
-    if int(time.time()) % 3600 < monitor_interval * 60:
+    # 每4小時摘要
+    if int(time.time()) % 14400 < monitor_interval * 60:
         await send_summary_to_channel(channel, results)
 
     log.info(f"=== 自動監控完成，{len(results)} 檔 ===")
@@ -188,36 +188,168 @@ def _send_alert_to_channel(channel, ta, rule):
         log.error(f"發送警報失敗: {e}")
 
 
+def _ta_detail_line(ta) -> str:
+    """生成單一資產的詳細技術分析一行文字"""
+    parts = []
+
+    # RSI
+    if ta.rsi14 is not None:
+        rsi_state = "超買" if ta.rsi14 > 70 else "超賣" if ta.rsi14 < 30 else "中性"
+        parts.append(f"RSI={ta.rsi14:.1f}({rsi_state})")
+
+    # MACD
+    if ta.macd is not None and ta.macd_signal is not None:
+        hist = ta.macd - ta.macd_signal
+        macd_state = "金叉" if hist > 0 else "死叉"
+        parts.append(f"MACD={ta.macd:.3f}({macd_state})")
+
+    # MA200
+    if ta.sma200 is not None:
+        diff_pct = (ta.current_price - ta.sma200) / ta.sma200 * 100
+        above = "▲" if diff_pct > 0 else "▼"
+        parts.append(f"MA200={fmt_price(ta.sma200)}({above}{abs(diff_pct):.1f}%)")
+
+    # 布林帶
+    if ta.bb_upper is not None and ta.bb_lower is not None:
+        bb_pos = (ta.current_price - ta.bb_lower) / (ta.bb_upper - ta.bb_lower) * 100
+        bb_state = "上軌" if ta.current_price >= ta.bb_upper else "下軌" if ta.current_price <= ta.bb_lower else f"中{bb_pos:.0f}%"
+        parts.append(f"BB={bb_state}")
+
+    return " | ".join(parts) if parts else "數據不足"
+
+
+def _signal_conclusion(ta) -> str:
+    """根據技術指標給出結論"""
+    conclusions = []
+
+    # RSI 結論
+    if ta.rsi14 is not None:
+        if ta.rsi14 > 80:
+            conclusions.append("RSI 極度超買，回調風險高")
+        elif ta.rsi14 > 70:
+            conclusions.append("RSI 超買區域，警惕獲利了結")
+        elif ta.rsi14 < 20:
+            conclusions.append("RSI 極度超賣，強反彈可能")
+        elif ta.rsi14 < 30:
+            conclusions.append("RSI 超賣區域，留意反彈機會")
+        else:
+            conclusions.append(f"RSI 中性({ta.rsi14:.1f})，無明顯方向")
+
+    # MA200 結論
+    if ta.sma200 is not None:
+        if ta.current_price > ta.sma200:
+            pct = (ta.current_price - ta.sma200) / ta.sma200 * 100
+            conclusions.append(f"多頭格局，價格高於MA200 {pct:.1f}%")
+        else:
+            pct = (ta.sma200 - ta.current_price) / ta.sma200 * 100
+            conclusions.append(f"空頭格局，價格低於MA200 {pct:.1f}%")
+
+    # MACD 結論
+    if ta.macd is not None and ta.macd_signal is not None:
+        hist = ta.macd - ta.macd_signal
+        if hist > 0 and abs(hist) > 0.1:
+            conclusions.append("MACD 開口向上，多方動能強")
+        elif hist < 0 and abs(hist) > 0.1:
+            conclusions.append("MACD 開口向下，空方動能強")
+        elif abs(hist) <= 0.05:
+            conclusions.append("MACD 交叉附近，方向待確認")
+
+    # 布林帶結論
+    if ta.bb_upper is not None and ta.bb_lower is not None:
+        bandwidth = ta.bb_upper - ta.bb_lower
+        if ta.current_price >= ta.bb_upper:
+            conclusions.append("價格突破布林上軌，強勢運行關注回調")
+        elif ta.current_price <= ta.bb_lower:
+            conclusions.append("價格跌破布林下軌，弱勢運行關注支撐")
+        elif bandwidth < ta.bb_lower * 0.03:
+            conclusions.append("布林帶收窄，突破機會將至")
+
+    return " • ".join(conclusions) if conclusions else "綜合指標無明確信號"
+
+
 async def send_summary_to_channel(channel, results: list):
     if not results:
         return
+
+    # 分類
     bullish, overbought, bearish, neutral = [], [], [], []
     for r in results:
         sym = r["symbol"]
         ta = r["ta"]
         if ta.above_ma200 and ta.current_price > (ta.sma50 or float("inf")):
-            bullish.append(sym)
+            bullish.append(r)
         elif ta.rsi14 and ta.rsi14 > 70:
-            overbought.append(sym)
+            overbought.append(r)
         elif ta.below_ma200 and ta.current_price < (ta.sma50 or 0):
-            bearish.append(sym)
+            bearish.append(r)
         else:
-            neutral.append(sym)
-
-    fields = []
-    if bullish:   fields.append({"name": "🟢 多頭訊號",   "value": ", ".join(bullish),  "inline": True})
-    if overbought:fields.append({"name": "🔥 超買警告",   "value": ", ".join(overbought),"inline": True})
-    if bearish:   fields.append({"name": "🔴 空頭訊號",   "value": ", ".join(bearish),  "inline": True})
-    if neutral:   fields.append({"name": "⚪ 中性觀望",   "value": ", ".join(neutral),  "inline": True})
+            neutral.append(r)
 
     now = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
     embed = make_embed(
         title=f"📋 市場摘要 · {now[11:]}",
-        description=f"共監控 **{len(results)}** 檔資產",
+        description=f"共監控 **{len(results)}** 檔資產 | 每4小時更新",
         color=0x7289DA,
-        fields=fields,
-        footer="Market Monitor 每小時摘要",
+        fields=[],
+        footer="Market Monitor 每4小時摘要",
     )
+
+    # 多頭訊號
+    if bullish:
+        lines = []
+        for r in bullish:
+            ta = r["ta"]
+            detail = _ta_detail_line(ta)
+            conclusion = _signal_conclusion(ta)
+            lines.append(f"**{r['symbol']}** {fmt_price(ta.current_price)} {fmt_pct(ta.pct_change)}\n{detail}\n→ {conclusion}")
+        embed.add_field(
+            name="🟢 多頭訊號",
+            value="\n\n".join(lines)[:1024],
+            inline=False
+        )
+
+    # 超買警告
+    if overbought:
+        lines = []
+        for r in overbought:
+            ta = r["ta"]
+            detail = _ta_detail_line(ta)
+            conclusion = _signal_conclusion(ta)
+            lines.append(f"**{r['symbol']}** {fmt_price(ta.current_price)} {fmt_pct(ta.pct_change)}\n{detail}\n→ {conclusion}")
+        embed.add_field(
+            name="🔥 超買警告",
+            value="\n\n".join(lines)[:1024],
+            inline=False
+        )
+
+    # 空頭訊號
+    if bearish:
+        lines = []
+        for r in bearish:
+            ta = r["ta"]
+            detail = _ta_detail_line(ta)
+            conclusion = _signal_conclusion(ta)
+            lines.append(f"**{r['symbol']}** {fmt_price(ta.current_price)} {fmt_pct(ta.pct_change)}\n{detail}\n→ {conclusion}")
+        embed.add_field(
+            name="🔴 空頭訊號",
+            value="\n\n".join(lines)[:1024],
+            inline=False
+        )
+
+    # 中性觀望
+    if neutral:
+        lines = []
+        for r in neutral:
+            ta = r["ta"]
+            detail = _ta_detail_line(ta)
+            conclusion = _signal_conclusion(ta)
+            lines.append(f"**{r['symbol']}** {fmt_price(ta.current_price)} {fmt_pct(ta.pct_change)}\n{detail}\n→ {conclusion}")
+        embed.add_field(
+            name="⚪ 中性觀望",
+            value="\n\n".join(lines)[:1024],
+            inline=False
+        )
+
     await channel.send(embed=embed)
 
 
@@ -383,29 +515,62 @@ async def cmd_summary(interaction: discord.Interaction):
 
     bullish, overbought, bearish, neutral = [], [], [], []
     for r in results:
+        sym = r["symbol"]
         ta = r["ta"]
         if ta.above_ma200 and ta.current_price > (ta.sma50 or float("inf")):
-            bullish.append(r["symbol"])
+            bullish.append(r)
         elif ta.rsi14 and ta.rsi14 > 70:
-            overbought.append(r["symbol"])
+            overbought.append(r)
         elif ta.below_ma200 and ta.current_price < (ta.sma50 or 0):
-            bearish.append(r["symbol"])
+            bearish.append(r)
         else:
-            neutral.append(r["symbol"])
-
-    fields = []
-    if bullish:   fields.append({"name": "🟢 多頭訊號",   "value": ", ".join(bullish),  "inline": True})
-    if overbought:fields.append({"name": "🔥 超買警告",   "value": ", ".join(overbought),"inline": True})
-    if bearish:   fields.append({"name": "🔴 空頭訊號",   "value": ", ".join(bearish),  "inline": True})
-    if neutral:   fields.append({"name": "⚪ 中性觀望",   "value": ", ".join(neutral),  "inline": True})
+            neutral.append(r)
 
     now = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
     embed = make_embed(
         title=f"📋 市場摘要 · {now[11:]}",
-        description=f"共監控 **{len(results)}** 檔資產",
+        description=f"共監控 **{len(results)}** 檔資產 | 每4小時更新",
         color=0x7289DA,
-        fields=fields,
+        fields=[],
+        footer="Market Monitor 每4小時摘要",
     )
+
+    if bullish:
+        lines = []
+        for r in bullish:
+            ta = r["ta"]
+            detail = _ta_detail_line(ta)
+            conclusion = _signal_conclusion(ta)
+            lines.append(f"**{r['symbol']}** {fmt_price(ta.current_price)} {fmt_pct(ta.pct_change)}\n{detail}\n→ {conclusion}")
+        embed.add_field(name="🟢 多頭訊號", value="\n\n".join(lines)[:1024], inline=False)
+
+    if overbought:
+        lines = []
+        for r in overbought:
+            ta = r["ta"]
+            detail = _ta_detail_line(ta)
+            conclusion = _signal_conclusion(ta)
+            lines.append(f"**{r['symbol']}** {fmt_price(ta.current_price)} {fmt_pct(ta.pct_change)}\n{detail}\n→ {conclusion}")
+        embed.add_field(name="🔥 超買警告", value="\n\n".join(lines)[:1024], inline=False)
+
+    if bearish:
+        lines = []
+        for r in bearish:
+            ta = r["ta"]
+            detail = _ta_detail_line(ta)
+            conclusion = _signal_conclusion(ta)
+            lines.append(f"**{r['symbol']}** {fmt_price(ta.current_price)} {fmt_pct(ta.pct_change)}\n{detail}\n→ {conclusion}")
+        embed.add_field(name="🔴 空頭訊號", value="\n\n".join(lines)[:1024], inline=False)
+
+    if neutral:
+        lines = []
+        for r in neutral:
+            ta = r["ta"]
+            detail = _ta_detail_line(ta)
+            conclusion = _signal_conclusion(ta)
+            lines.append(f"**{r['symbol']}** {fmt_price(ta.current_price)} {fmt_pct(ta.pct_change)}\n{detail}\n→ {conclusion}")
+        embed.add_field(name="⚪ 中性觀望", value="\n\n".join(lines)[:1024], inline=False)
+
     await interaction.followup.send(embed=embed)
 
 
