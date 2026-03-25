@@ -112,11 +112,18 @@ def fetch_news(symbol: str, max_items: int = 5) -> list[dict] | None:
             title = item.get("title", "")
             publisher = item.get("publisher", "")
             publish_time = item.get("providerPublishTime")
+            time_str = ""
+            if publish_time:
+                try:
+                    import datetime as dt
+                    time_str = dt.datetime.fromtimestamp(publish_time).strftime("%m/%d %H:%M")
+                except Exception:
+                    pass
             if title:
                 results.append({
                     "title": title,
                     "publisher": publisher,
-                    "time": publish_time,
+                    "time": time_str,
                 })
         return results if results else None
     except Exception as e:

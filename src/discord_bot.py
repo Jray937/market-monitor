@@ -325,7 +325,8 @@ def fmt_news(news_list: list[dict]) -> str:
     parts = []
     for i, item in enumerate(news_list, 1):
         src = f" ({item['publisher']})" if item.get("publisher") else ""
-        parts.append(f"{i}. {item['title']}{src}")
+        time_str = f" [{item['time']}]" if item.get("time") else ""
+        parts.append(f"{i}. {item['title']}{src}{time_str}")
     return "\n".join(parts)
 
 
@@ -336,41 +337,51 @@ def gather_agent_context(agent_key: str, symbol: str | None) -> str:
 
     sections = []
 
-    # 所有角色都嘗試獲取基礎價格/技術數據
-    ta_data = get_ta_summary(symbol)
-
-    # 根據角色決定需要哪些額外數據
-    need_fundamentals = agent_key in ("sector_analyst", "risk_officer", "macro_strategist", "quant_strategist")
-    need_news = agent_key in ("intelligence_officer", "macro_strategist", "sector_analyst")
-    need_risk_data = agent_key in ("risk_officer", "trader", "quant_strategist")
+    # Agent 角色 → 需要的數據類型
+    AGENT_DATA_NEEDS = {
+        "trader":               {"ta": True,  "fundamentals": False, "news": False, "risk": True},
+        "sector_analyst":       {"ta": False, "fundamentals": True,  "news": True,  "risk": False},
+        "macro_strategist":     {"ta": False, "fundamentals": True,  "news": True,  "risk": False},
+        "intelligence_officer": {"ta": False, "fundamentals": False, "news": True,  "risk": False},
+        "risk_officer":         {"ta": True,  "fundamentals": True,  "news": False, "risk": True},
+        "quant_strategist":     {"ta": True,  "fundamentals": True,  "news": False, "risk": True},
+    }
+    needs = AGENT_DATA_NEEDS.get(agent_key, {"ta": True, "fundamentals": True, "news": True, "risk": False})
 
     # ── 技術數據 ──
-    if ta_data:
-        sections.append(f"【技術分析數據】\n{ta_data}")
+    ta_data = None
+    if needs["ta"]:
+        ta_data = get_ta_summary(symbol)
+        if ta_data:
+            sections.append(f"【技術分析數據】\n{ta_data}")
 
     # ── 基本面數據 ──
-    if need_fundamentals or not ta_data:
+    info = None
+    if needs["fundamentals"]:
         info = fetch_stock_info(symbol)
         if info:
             fundamentals_text = fmt_fundamentals(info)
             if fundamentals_text:
                 sections.append(f"【基本面數據】\n{fundamentals_text}")
 
-            # 風控專用：額外提取風險指標
-            if need_risk_data and info:
-                risk_parts = []
-                if info.get("beta") is not None:
-                    risk_parts.append(f"Beta：{info['beta']:.2f}")
-                if info.get("52w_high") and info.get("52w_low"):
-                    range_pct = (info["52w_high"] - info["52w_low"]) / info["52w_low"] * 100
-                    risk_parts.append(f"52週波幅：{range_pct:.1f}%")
-                if info.get("debt_to_equity") is not None:
-                    risk_parts.append(f"負債/權益比：{info['debt_to_equity']:.1f}")
-                if risk_parts:
-                    sections.append(f"【風險指標】\n" + "\n".join(risk_parts))
+    # ── 風險指標（需要基本面數據支撐）──
+    if needs["risk"]:
+        if info is None:
+            info = fetch_stock_info(symbol)
+        if info:
+            risk_parts = []
+            if info.get("beta") is not None:
+                risk_parts.append(f"Beta：{info['beta']:.2f}")
+            if info.get("52w_high") and info.get("52w_low") and info["52w_low"] > 0:
+                range_pct = (info["52w_high"] - info["52w_low"]) / info["52w_low"] * 100
+                risk_parts.append(f"52週波幅：{range_pct:.1f}%")
+            if info.get("debt_to_equity") is not None:
+                risk_parts.append(f"負債/權益比：{info['debt_to_equity']:.1f}")
+            if risk_parts:
+                sections.append(f"【風險指標】\n" + "\n".join(risk_parts))
 
     # ── 新聞數據 ──
-    if need_news or not ta_data:
+    if needs["news"]:
         news = fetch_news(symbol)
         if news:
             news_text = fmt_news(news)
