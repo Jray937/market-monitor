@@ -126,6 +126,8 @@ STATE_PROCESSING = "🔄 處理中"
 STATE_DONE       = "✅ 完成"
 STATE_ERROR      = "⚠️ 錯誤"
 
+ACK_MARKER       = "已接收任務"       # Agent 確認訊息標記
+
 # ══════════════════════════════════════════════════════════════
 # 工具函式
 # ══════════════════════════════════════════════════════════════
@@ -412,15 +414,24 @@ def run_leader_bot(bot_token: str, team_channel_id: int, user_channel_id: int = 
                 task = pending_tasks[task_id]
                 agent_key = AGENT_NAME_TO_KEY.get(agent_name)
                 if agent_key and agent_key in task.agent_states:
-                    # 標記為處理中 → 完成
-                    if task.agent_states[agent_key] not in (STATE_DONE, STATE_TIMEOUT, STATE_ERROR):
-                        task.agent_states[agent_key] = STATE_PROCESSING
-                        await update_user_status(task)
-                        task.reports.append((agent_name, report_text))
-                        await asyncio.sleep(0.5)
-                        task.agent_states[agent_key] = STATE_DONE
-                        await update_user_status(task)
-                        log.info(f"📥 Leader 收到 {agent_name} 報告（{task_id}）")
+                    # 區分「已接收確認」和「正式報告」
+                    is_ack = ACK_MARKER in report_text
+                    if is_ack:
+                        # 確認收到，只更新狀態，不加入 reports
+                        if task.agent_states[agent_key] == STATE_SENT:
+                            task.agent_states[agent_key] = STATE_RECEIVED
+                            await update_user_status(task)
+                            log.info(f"✅ Leader 確認 {agent_name} 已接收（{task_id}）")
+                    else:
+                        # 正式報告：標記為處理中 → 完成
+                        if task.agent_states[agent_key] not in (STATE_DONE, STATE_TIMEOUT, STATE_ERROR):
+                            task.agent_states[agent_key] = STATE_PROCESSING
+                            await update_user_status(task)
+                            task.reports.append((agent_name, report_text))
+                            await asyncio.sleep(0.5)
+                            task.agent_states[agent_key] = STATE_DONE
+                            await update_user_status(task)
+                            log.info(f"📥 Leader 收到 {agent_name} 報告（{task_id}）")
             return
 
         # ── 用戶頻道：接收需求 ──
@@ -551,11 +562,10 @@ def run_leader_bot(bot_token: str, team_channel_id: int, user_channel_id: int = 
     async def summarize_and_reply(task):
         reports = task.reports
 
-        # 最終狀態
+        # 最終狀態：未完成的 Agent 標記為超時
         for key in task.dispatch_agents:
-            if task.agent_states[key] not in (STATE_DONE,):
-                if task.agent_states[key] == STATE_SENT:
-                    task.agent_states[key] = STATE_TIMEOUT
+            if task.agent_states[key] != STATE_DONE:
+                task.agent_states[key] = STATE_TIMEOUT
         await update_user_status(task)
         await asyncio.sleep(1)
 
@@ -783,7 +793,7 @@ def run_team_agent_bot(bot_token: str, agent_key: str, team_channel_id: int):
 
         # 回傳已接收確認
         await message.channel.send(
-            f"[{agent['name']}] {task_id} ✅ 已接收任務，開始分析..."
+            f"[{agent['name']}] {task_id} ✅ {ACK_MARKER}，開始分析..."
         )
 
         # 嘗試從任務描述中提取標的
