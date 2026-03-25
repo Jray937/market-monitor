@@ -10,6 +10,10 @@ Polygon.io 期權數據獲取
   - 指數退讓 + 429 rate limit 處理
   - ITM/OTM/ATM 自動判定
   - generator 永遠轉 list（避免一次性問題）
+
+版本區分邏輯：
+  - Pro 版：返回 ListResponse 對象，屬性 `.results` 是 list
+  - Free 版：返回普通 list，直接迭代
 """
 import os
 import time as _time_module
@@ -64,6 +68,7 @@ def _set_cached(key: str, data):
 # ── 客戶端初始化 ────────────────────────────────
 
 def _init_client() -> RESTClient:
+    """初始化並快取 Polygon 客戶端"""
     global _client, _API_TIER
     if _client is not None:
         return _client
@@ -137,7 +142,6 @@ def _get_underlying_price(ticker: str) -> float:
     price = 0.0
     if resp:
         try:
-            # namedtuple 有 .close 屬性，dict 有 .get("close")
             if hasattr(resp[0], 'close'):
                 price = float(resp[0].close)
             else:
