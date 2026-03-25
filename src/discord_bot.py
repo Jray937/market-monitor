@@ -176,7 +176,13 @@ async def call_minimax(
             system=system_prompt,
             messages=[{"role": "user", "content": user_message}],
         )
-        return response.content[0].text if response.content else "⚠️ 無回應"
+        if not response.content:
+            return "⚠️ 無回應"
+        # Skip ThinkingBlock objects; extract text from TextBlock only
+        for block in response.content:
+            if hasattr(block, "text"):
+                return block.text
+        return "⚠️ 無回應"
     except Exception as e:
         log.error(f"❌ MiniMax API 錯誤：{e}")
         return "⚠️ 分析失敗"
