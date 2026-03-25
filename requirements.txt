@@ -1,6 +1,5 @@
 yfinance>=0.2.40
 pandas>=2.0.0
-pandas-ta>=0.8.18
 requests>=2.28.0
 PyYAML>=6.0
 APScheduler>=3.10.4
