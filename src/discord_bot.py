@@ -352,11 +352,45 @@ def run_leader_bot(bot_token: str, team_channel_id: int, user_channel_id: int = 
         except Exception as e:
             log.error(f"❌ 更新狀態失敗：{e}")
 
+    def build_task_message(task_id: str, dispatch_task: str, agents_to_dispatch: list):
+        """構建團隊任務的 content 文字與 embed，供 on_message 和 /ask 共用"""
+        agent_list = "\n".join([
+            f"{TEAM_AGENTS[k]['emoji']} {TEAM_AGENTS[k]['name']}"
+            for k in agents_to_dispatch
+        ])
+        task_content = (
+            f"📋 團隊任務：{dispatch_task}\n\n"
+            f"參與成員：{', '.join([TEAM_AGENTS[k]['name'] for k in agents_to_dispatch])}\n\n"
+            f"任務ID：{task_id}"
+        )
+        task_embed = make_embed(
+            title="📋 團隊任務",
+            description=(
+                f"**任務描述：**\n{dispatch_task}\n\n"
+                f"**參與成員：**\n{agent_list}\n\n"
+                f"請各 Agent 根據自身專業領域提供分析，並回傳報告到本頻道。"
+            ),
+            color=0xFFD700,
+            footer=f"任務ID：{task_id}",
+        )
+        return task_content, task_embed
+
     @client.event
     async def on_ready():
         log.info(f"✅ Leader Bot 上線：{client.user}")
-        await tree.sync()
-        log.info("✅ 斜線命令已同步")
+        # 先同步到各已加入的伺服器（立即生效）
+        for guild in client.guilds:
+            try:
+                synced = await tree.sync(guild=guild)
+                log.info(f"✅ 已同步 {len(synced)} 個命令至 {guild.name}")
+            except Exception as e:
+                log.error(f"❌ 同步命令至 {guild.name} 失敗：{e}")
+        # 再全局同步（新伺服器用）
+        try:
+            synced = await tree.sync()
+            log.info(f"✅ 全局斜線命令已同步（{len(synced)} 個命令）")
+        except Exception as e:
+            log.error(f"❌ 全局命令同步失敗：{e}")
         team_ch = client.get_channel(team_channel_id)
         if team_ch:
             embed = make_embed(
@@ -470,22 +504,9 @@ def run_leader_bot(bot_token: str, team_channel_id: int, user_channel_id: int = 
             )
             return
 
-        # 發任務到團隊頻道
-        agent_list = "\n".join([
-            f"{TEAM_AGENTS[k]['emoji']} {TEAM_AGENTS[k]['name']}"
-            for k in agents_to_dispatch
-        ])
-        task_embed = make_embed(
-            title=f"📋 團隊任務",
-            description=(
-                f"**任務描述：**\n{dispatch_task}\n\n"
-                f"**參與成員：**\n{agent_list}\n\n"
-                f"請各 Agent 根據自身專業領域提供分析，並回傳報告到本頻道。"
-            ),
-            color=0xFFD700,
-            footer=f"任務ID：{task_id}",
-        )
-        await team_ch.send(embed=task_embed)
+        # 發任務到團隊頻道（同時附帶 content 文字，讓 Agent 能解析）
+        task_content, task_embed = build_task_message(task_id, dispatch_task, agents_to_dispatch)
+        await team_ch.send(content=task_content, embed=task_embed)
 
         # 如果有 direct_answer，先顯示給用戶
         if direct_answer and action == "hybrid":
@@ -514,7 +535,8 @@ def run_leader_bot(bot_token: str, team_channel_id: int, user_channel_id: int = 
                         task.agent_states[key] = STATE_TIMEOUT
 
             all_done = all(
-                s in (STATE_DONE, STATE_TIMEOUT, STATE_ERROR) for s in task.agent_states.values()
+                task.agent_states[key] in (STATE_DONE, STATE_TIMEOUT, STATE_ERROR)
+                for key in task.dispatch_agents
             )
             if all_done:
                 break
@@ -676,21 +698,8 @@ def run_leader_bot(bot_token: str, team_channel_id: int, user_channel_id: int = 
             )
             return
 
-        agent_list = "\n".join([
-            f"{TEAM_AGENTS[k]['emoji']} {TEAM_AGENTS[k]['name']}"
-            for k in agents_to_dispatch
-        ])
-        task_embed = make_embed(
-            title="📋 團隊任務",
-            description=(
-                f"**任務描述：**\n{dispatch_task}\n\n"
-                f"**參與成員：**\n{agent_list}\n\n"
-                f"請各 Agent 根據自身專業領域提供分析，並回傳報告到本頻道。"
-            ),
-            color=0xFFD700,
-            footer=f"任務ID：{task_id}",
-        )
-        await team_ch.send(embed=task_embed)
+        task_content, task_embed = build_task_message(task_id, dispatch_task, agents_to_dispatch)
+        await team_ch.send(content=task_content, embed=task_embed)
         asyncio.create_task(monitor_task(task, client))
 
     log.info("🚀 啟動 Leader Bot")
@@ -725,7 +734,16 @@ def run_team_agent_bot(bot_token: str, agent_key: str, team_channel_id: int):
     @client.event
     async def on_ready():
         log.info(f"✅ {agent['name']} Bot 上線：{client.user}")
-        await tree.sync()
+        for guild in client.guilds:
+            try:
+                await tree.sync(guild=guild)
+                log.info(f"✅ {agent['name']} 已同步命令至 {guild.name}")
+            except Exception as e:
+                log.error(f"❌ {agent['name']} 同步至 {guild.name} 失敗：{e}")
+        try:
+            await tree.sync()
+        except Exception as e:
+            log.error(f"❌ {agent['name']} 全局命令同步失敗：{e}")
         team_ch = client.get_channel(team_channel_id)
         if team_ch:
             embed = make_embed(
@@ -742,7 +760,19 @@ def run_team_agent_bot(bot_token: str, agent_key: str, team_channel_id: int):
         if message.channel.id != team_channel_id:
             return
 
-        task_id, task_desc = parse_task_message(message.content)
+        # 優先從 message.content 解析（Leader 正常發送 content + embed）；
+        # 若 content 為空則回退到 embed（相容舊版 Leader 只發 embed 的情況）
+        content_to_parse = message.content
+        if not content_to_parse and message.embeds:
+            embed = message.embeds[0]
+            parts = []
+            if embed.footer and embed.footer.text:
+                parts.append(embed.footer.text)
+            if embed.description:
+                parts.append(embed.description)
+            content_to_parse = "\n".join(parts)
+
+        task_id, task_desc = parse_task_message(content_to_parse)
         if not task_id:
             return
 
