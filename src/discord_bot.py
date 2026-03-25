@@ -27,7 +27,7 @@ from typing import Optional
 
 # ── 本地模組 ──
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from src.data_fetcher import fetch_ohlcv
+from src.data_fetcher import fetch_ohlcv, fetch_stock_info, fetch_news
 from src.analyzer import compute_ta
 
 # ── 日誌 ──
@@ -260,6 +260,127 @@ def get_ta_summary(symbol: str) -> Optional[str]:
     except Exception as e:
         log.error(f"❌ 獲取 {symbol} 技術數據失敗：{e}")
         return None
+
+
+def _fmt_number(val, prefix="", suffix="", decimal=2):
+    """格式化數字，支援大數簡寫"""
+    if val is None:
+        return None
+    if isinstance(val, (int, float)):
+        if abs(val) >= 1e12:
+            return f"{prefix}{val/1e12:.{decimal}f}T{suffix}"
+        if abs(val) >= 1e9:
+            return f"{prefix}{val/1e9:.{decimal}f}B{suffix}"
+        if abs(val) >= 1e6:
+            return f"{prefix}{val/1e6:.{decimal}f}M{suffix}"
+        return f"{prefix}{val:.{decimal}f}{suffix}"
+    return str(val)
+
+
+def fmt_fundamentals(info: dict) -> str:
+    """將基本面數據格式化為可讀文字"""
+    parts = []
+    if info.get("name"):
+        sector = f"（{info['sector']} / {info['industry']}）" if info.get("sector") else ""
+        parts.append(f"🏢 公司：{info['name']}{sector}")
+    if info.get("market_cap"):
+        parts.append(f"💰 市值：{_fmt_number(info['market_cap'], prefix='$')}")
+    if info.get("pe_ratio"):
+        fwd = f" / 預估PE {info['forward_pe']:.1f}" if info.get("forward_pe") else ""
+        parts.append(f"📊 PE（TTM）：{info['pe_ratio']:.1f}{fwd}")
+    if info.get("pb_ratio"):
+        parts.append(f"📊 PB：{info['pb_ratio']:.2f}")
+    if info.get("ps_ratio"):
+        parts.append(f"📊 PS：{info['ps_ratio']:.2f}")
+    if info.get("revenue"):
+        growth = f"（YoY {info['revenue_growth']:+.1%}）" if info.get("revenue_growth") is not None else ""
+        parts.append(f"💵 營收：{_fmt_number(info['revenue'], prefix='$')}{growth}")
+    if info.get("profit_margin") is not None:
+        parts.append(f"📈 利潤率：{info['profit_margin']:.1%}")
+    if info.get("operating_margin") is not None:
+        parts.append(f"📈 營業利潤率：{info['operating_margin']:.1%}")
+    if info.get("roe") is not None:
+        parts.append(f"📈 ROE：{info['roe']:.1%}")
+    if info.get("debt_to_equity") is not None:
+        parts.append(f"⚠️ 負債/權益比：{info['debt_to_equity']:.1f}")
+    if info.get("free_cashflow"):
+        parts.append(f"💵 自由現金流：{_fmt_number(info['free_cashflow'], prefix='$')}")
+    if info.get("dividend_yield") is not None and info["dividend_yield"] > 0:
+        parts.append(f"💰 股息率：{info['dividend_yield']:.2%}")
+    if info.get("beta") is not None:
+        parts.append(f"📐 Beta：{info['beta']:.2f}")
+    if info.get("52w_high") and info.get("52w_low"):
+        parts.append(f"📏 52週區間：${info['52w_low']:.2f} ~ ${info['52w_high']:.2f}")
+    if info.get("target_price"):
+        rec = f"（分析師評級：{info['recommendation']}）" if info.get("recommendation") else ""
+        analysts = f"（{info['num_analysts']}位分析師）" if info.get("num_analysts") else ""
+        parts.append(f"🎯 目標價：${info['target_price']:.2f}{rec}{analysts}")
+    return "\n".join(parts) if parts else ""
+
+
+def fmt_news(news_list: list[dict]) -> str:
+    """將新聞列表格式化為可讀文字"""
+    if not news_list:
+        return ""
+    parts = []
+    for i, item in enumerate(news_list, 1):
+        src = f" ({item['publisher']})" if item.get("publisher") else ""
+        parts.append(f"{i}. {item['title']}{src}")
+    return "\n".join(parts)
+
+
+def gather_agent_context(agent_key: str, symbol: str | None) -> str:
+    """根據 Agent 角色主動抓取最相關的數據，打包成上下文字串"""
+    if not symbol:
+        return ""
+
+    sections = []
+
+    # 所有角色都嘗試獲取基礎價格/技術數據
+    ta_data = get_ta_summary(symbol)
+
+    # 根據角色決定需要哪些額外數據
+    need_fundamentals = agent_key in ("sector_analyst", "risk_officer", "macro_strategist", "quant_strategist")
+    need_news = agent_key in ("intelligence_officer", "macro_strategist", "sector_analyst")
+    need_risk_data = agent_key in ("risk_officer", "trader", "quant_strategist")
+
+    # ── 技術數據 ──
+    if ta_data:
+        sections.append(f"【技術分析數據】\n{ta_data}")
+
+    # ── 基本面數據 ──
+    if need_fundamentals or not ta_data:
+        info = fetch_stock_info(symbol)
+        if info:
+            fundamentals_text = fmt_fundamentals(info)
+            if fundamentals_text:
+                sections.append(f"【基本面數據】\n{fundamentals_text}")
+
+            # 風控專用：額外提取風險指標
+            if need_risk_data and info:
+                risk_parts = []
+                if info.get("beta") is not None:
+                    risk_parts.append(f"Beta：{info['beta']:.2f}")
+                if info.get("52w_high") and info.get("52w_low"):
+                    range_pct = (info["52w_high"] - info["52w_low"]) / info["52w_low"] * 100
+                    risk_parts.append(f"52週波幅：{range_pct:.1f}%")
+                if info.get("debt_to_equity") is not None:
+                    risk_parts.append(f"負債/權益比：{info['debt_to_equity']:.1f}")
+                if risk_parts:
+                    sections.append(f"【風險指標】\n" + "\n".join(risk_parts))
+
+    # ── 新聞數據 ──
+    if need_news or not ta_data:
+        news = fetch_news(symbol)
+        if news:
+            news_text = fmt_news(news)
+            if news_text:
+                sections.append(f"【近期新聞】\n{news_text}")
+
+    if not sections:
+        return ""
+
+    return "\n\n".join(sections)
 
 
 # ══════════════════════════════════════════════════════════════
@@ -837,22 +958,23 @@ def run_team_agent_bot(bot_token: str, agent_key: str, team_channel_id: int):
         symbol_match = re.search(r'\b([A-Z]{2,5}(?:-USD)?)\b', task_desc or "")
         symbol = symbol_match.group(1) if symbol_match else None
 
-        ta_data = None
-        if symbol:
-            ta_data = get_ta_summary(symbol)
+        # 根據 Agent 角色主動抓取相關數據
+        log.info(f"🔍 {agent['name']} 正在為 {symbol or '(無標的)'} 抓取數據...")
+        context_data = gather_agent_context(agent_key, symbol)
 
         # 構造分析消息
-        if ta_data:
+        if context_data:
             user_msg = f"""{task_desc}
 
-參考數據：
-{ta_data}
+以下是我為你抓取的即時市場數據：
+
+{context_data}
 
 請基於以上數據和你的專業知識，直接給出你的分析結論。不要索要額外數據，不要說「建議查看」，直接給出明確判斷。"""
         else:
             user_msg = f"""{task_desc}
 
-目前沒有即時技術數據，但你是專業分析師，請基於你的專業知識和經驗，直接給出你的分析和判斷。
+目前無法獲取該標的的即時數據，但你是專業分析師，請基於你的專業知識和經驗，直接給出你的分析和判斷。
 不要索要任何數據，不要推諉，不要說「需要更多信息」，直接給出你能提供的最佳分析。"""
 
         async with message.channel.typing():
@@ -876,12 +998,12 @@ def run_team_agent_bot(bot_token: str, agent_key: str, team_channel_id: int):
     @app_commands.describe(symbol="股票代碼")
     async def cmd_test(interaction: discord.Interaction, symbol: str):
         await interaction.response.defer()
-        ta_data = get_ta_summary(symbol.upper())
-        if not ta_data:
-            await interaction.followup.send(f"⚠️ 無法取得 {symbol} 數據")
+        context_data = gather_agent_context(agent_key, symbol.upper())
+        if not context_data:
+            await interaction.followup.send(f"⚠️ 無法取得 {symbol} 任何數據")
             return
 
-        user_msg = f"請分析 {symbol}。\n\n參考數據：\n{ta_data}"
+        user_msg = f"請分析 {symbol}。\n\n{context_data}"
         report = await call_minimax(agent["system_prompt"], user_msg)
 
         embed = make_embed(
