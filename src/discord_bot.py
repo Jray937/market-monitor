@@ -164,14 +164,11 @@ async def call_minimax(
 
     base_url = os.environ.get("MINIMAX_API_BASE_URL", "https://api.minimaxi.com/anthropic")
     model = os.environ.get("MINIMAX_MODEL", "MiniMax-M2.7")
-    proxy = os.environ.get("HTTPS_PROXY") or os.environ.get("HTTP_PROXY")
 
     try:
         client = anthropic.Anthropic(
             api_key=api_key,
             base_url=base_url,
-            http_proxy=proxy if proxy else None,
-            https_proxy=proxy if proxy else None,
         )
         response = client.messages.create(
             model=model,
@@ -182,7 +179,7 @@ async def call_minimax(
         return response.content[0].text if response.content else "⚠️ 無回應"
     except Exception as e:
         log.error(f"❌ MiniMax API 錯誤：{e}")
-        return f"⚠️ 分析失敗"
+        return "⚠️ 分析失敗"
 
 
 def get_ta_summary(symbol: str) -> Optional[str]:

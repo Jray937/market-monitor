@@ -17,7 +17,7 @@ services:
       - STATE_FILE=/app/alert_state.json
       # AI API 配置（MiniMax）
       - MINIMAX_API_KEY=${MINIMAX_API_KEY:-}
-      - MINIMAX_API_BASE_URL=${MINIMAX_API_BASE_URL:-https://api.minimax.io/anthropic}
+      - MINIMAX_API_BASE_URL=${MINIMAX_API_BASE_URL:-https://api.minimaxi.com/anthropic}
       - MINIMAX_MODEL=${MINIMAX_MODEL:-MiniMax-M2.7}
       # 代理設置（如果需要的話）
       - HTTPS_PROXY=${HTTPS_PROXY:-}
