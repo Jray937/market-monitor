@@ -54,3 +54,37 @@ symbols:
       alerts:
         - type: "macd_cross_up"
           cooldown_hours: 6
+
+# ─────────────────────────────────────────────
+# Agent Bot 配置（多 Bot 協調架構）
+# ⚠️ Token 在 Railway 環境變數設定，不要寫在這裡
+# ─────────────────────────────────────────────
+agents:
+  chief_strategist:
+    enabled: true
+    token_env: "CHIEF_STRATEGIST_TOKEN"
+    watch_symbols: ["NVDA", "TSLA", "SPY"]
+  trader:
+    enabled: true
+    token_env: "TRADER_TOKEN"
+    watch_symbols: ["NVDA", "TSLA", "AAPL"]
+  sector_analyst:
+    enabled: true
+    token_env: "SECTOR_ANALYST_TOKEN"
+    watch_symbols: ["AAPL", "MSFT", "GOOGL"]
+  macro_strategist:
+    enabled: true
+    token_env: "MACRO_STRATEGIST_TOKEN"
+    watch_symbols: ["SPY", "QQQ", "GLD"]
+  intelligence_officer:
+    enabled: true
+    token_env: "INTELLIGENCE_OFFICER_TOKEN"
+    watch_symbols: ["BTC-USD", "ETH-USD"]
+  risk_officer:
+    enabled: true
+    token_env: "RISK_OFFICER_TOKEN"
+    watch_symbols: ["NVDA", "TSLA", "BTC-USD"]
+  quant_strategist:
+    enabled: true
+    token_env: "QUANT_STRATEGIST_TOKEN"
+    watch_symbols: ["SPY", "QQQ"]
