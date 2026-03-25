@@ -21,7 +21,7 @@
 - Python 3.11
 - discord.py（Bot，支援 slash commands + on_message）
 - yfinance（市場數據）
-- anthropic（MiniMax API，Anthropic SDK 相容）
+- aiohttp（MiniMax API，原生 HTTP 調用）
 - APScheduler（排程）
 
 ---
@@ -34,7 +34,7 @@
 | `LEADER_BOT_TOKEN` | Leader Bot Discord Token |
 | `TEAM_CHANNEL_ID` | 團隊協調頻道 ID |
 | `MINIMAX_API_KEY` | MiniMax API Key |
-| `MINIMAX_API_BASE_URL` | `https://api.minimaxi.com/anthropic` |
+| `MINIMAX_API_BASE_URL` | `https://api.minimaxi.com/v1/chat/completions` |
 | `MINIMAX_MODEL` | `MiniMax-M2.7` |
 
 **各 Agent Token（否則該 Bot 不啟動）：**
