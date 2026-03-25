@@ -396,6 +396,9 @@ def run_leader_bot(bot_token: str, team_channel_id: int, user_channel_id: int = 
         mention_ids = {int(m.id) for m in message.mentions}
         is_mentioned = client.user.id in mention_ids
 
+        log.info(f"📨 on_message: author={message.author.id}, is_dm={is_dm}, "
+                 f"is_mentioned={is_mentioned}, content={message.content[:50]}")
+
         if not (is_dm or is_mentioned):
             return
 
@@ -601,6 +604,94 @@ def run_leader_bot(bot_token: str, team_channel_id: int, user_channel_id: int = 
             fields=fields,
         )
         await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    @tree.command(name="ask", description="向團隊提問，AI 會調度最合適的分析師")
+    @app_commands.describe(question="你的投資相關問題")
+    async def cmd_ask(interaction: discord.Interaction, question: str):
+        """主力命令：接收任意投資問題，調用 LLM 調度團隊處理"""
+        await interaction.response.defer(thinking=True)
+
+        decision = await leader_analyze(question)
+        action = decision.get("action", "dispatch")
+        agents_to_dispatch = [k for k in decision.get("agents", []) if k in TEAM_AGENTS]
+        if not agents_to_dispatch:
+            agents_to_dispatch = list(TEAM_AGENTS.keys())
+        dispatch_task = decision.get("task", question)
+        direct_answer = decision.get("direct_answer", "")
+
+        task_id = f"task_{int(time.time() * 1000)}"
+
+        # 直接回答
+        if action == "answer" and direct_answer:
+            embed = make_embed(
+                title="💬 回答",
+                description=direct_answer,
+                color=0x00C851,
+                footer=f"任務ID：{task_id}",
+            )
+            await interaction.followup.send(embed=embed)
+            return
+
+        # 建立狀態訊息
+        fields = []
+        for key in agents_to_dispatch:
+            ag = TEAM_AGENTS[key]
+            fields.append({"name": f"{ag['emoji']} {ag['name']}", "value": STATE_SENT, "inline": True})
+
+        status_embed = make_embed(
+            title=f"📋 分析任務：{task_id[:15]}...",
+            description=f"📌 {dispatch_task[:80]}\n\n⏳ 正在等待團隊回覆...",
+            color=0xFFD700,
+            footer=f"任務ID：{task_id}",
+            fields=fields,
+        )
+        status_msg = await interaction.followup.send(embed=status_embed)
+
+        # hybrid：先展示結論
+        if action == "hybrid" and direct_answer:
+            await interaction.followup.send(
+                embed=make_embed(title="💬 先說結論", description=direct_answer, color=0x00C851)
+            )
+
+        # 初始化任務
+        task = TaskState(task_id, interaction.channel, status_msg)
+        task.dispatch_agents = agents_to_dispatch
+        task.dispatch_task = dispatch_task
+        for key in task.agent_states:
+            task.agent_states[key] = STATE_PENDING
+        for key in agents_to_dispatch:
+            task.agent_states[key] = STATE_SENT
+
+        pending_tasks[task_id] = task
+        await update_user_status(task)
+
+        team_ch = client.get_channel(team_channel_id)
+        if not team_ch:
+            await status_msg.edit(
+                embed=make_embed(
+                    title="⚠️ 錯誤",
+                    description="無法訪問團隊頻道，請檢查 TEAM_CHANNEL_ID 配置。",
+                    color=0xFF4444,
+                )
+            )
+            return
+
+        agent_list = "\n".join([
+            f"{TEAM_AGENTS[k]['emoji']} {TEAM_AGENTS[k]['name']}"
+            for k in agents_to_dispatch
+        ])
+        task_embed = make_embed(
+            title="📋 團隊任務",
+            description=(
+                f"**任務描述：**\n{dispatch_task}\n\n"
+                f"**參與成員：**\n{agent_list}\n\n"
+                f"請各 Agent 根據自身專業領域提供分析，並回傳報告到本頻道。"
+            ),
+            color=0xFFD700,
+            footer=f"任務ID：{task_id}",
+        )
+        await team_ch.send(embed=task_embed)
+        asyncio.create_task(monitor_task(task, client))
 
     log.info("🚀 啟動 Leader Bot")
     client.run(bot_token, log_handler=None)
