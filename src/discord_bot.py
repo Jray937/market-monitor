@@ -183,6 +183,9 @@ STATE_ERROR      = "⚠️ 錯誤"
 
 ACK_MARKER       = "已接收任務"       # Agent 確認訊息標記
 
+# 跨 Agent 報告預覽長度（content 裏每條報告截取長度，需留足空間給任務結構，不超出 Discord 2000 字元限制）
+CROSS_REPORT_PREVIEW_LEN = 300
+
 # ══════════════════════════════════════════════════════════════
 # 工具函式
 # ══════════════════════════════════════════════════════════════
@@ -551,6 +554,12 @@ def run_leader_bot(bot_token: str, team_channel_id: int, user_channel_id: int = 
         except Exception as e:
             log.error(f"❌ 更新狀態失敗：{e}")
 
+    def _truncate(text: str, limit: int) -> str:
+        """截取文字並在超出時加省略號"""
+        if len(text) <= limit:
+            return text
+        return text[:limit].rstrip() + "…"
+
     def build_task_message(task_id: str, dispatch_task: str, agents_to_dispatch: list,
                            cross_agent_reports: list = None):
         """構建團隊任務的 content 文字與 embed，供 on_message 和 /ask 共用"""
@@ -564,15 +573,11 @@ def run_leader_bot(bot_token: str, team_channel_id: int, user_channel_id: int = 
         context_section = ""
         context_embed_section = ""
         if cross_agent_reports:
-            per_report_budget = 300
             report_lines = []
             full_report_lines = []
             for name, report in cross_agent_reports:
-                truncated = report[:per_report_budget].rstrip()
-                if len(report) > per_report_budget:
-                    truncated += "…"
-                report_lines.append(f"— {name}：{truncated}")
-                full_report_lines.append(f"**{name}：**\n{report[:1000]}")
+                report_lines.append(f"— {name}：{_truncate(report, CROSS_REPORT_PREVIEW_LEN)}")
+                full_report_lines.append(f"**{name}：**\n{_truncate(report, 1000)}")
             context_section = "\n\n【團隊研究報告，供參考】\n" + "\n".join(report_lines)
             context_embed_section = "\n\n**📋 團隊研究報告（供參考）：**\n" + "\n\n".join(full_report_lines)
 
@@ -764,7 +769,15 @@ def run_leader_bot(bot_token: str, team_channel_id: int, user_channel_id: int = 
         asyncio.create_task(monitor_task(task, client))
 
     async def _wait_for_agents(task, agent_keys):
-        """等待指定 Agent 完成（或超時）"""
+        """等待指定 Agent 完成（或超時）。
+
+        Args:
+            task: TaskState 物件，用於讀取/更新 agent_states 和超時設定。
+            agent_keys: 要等待的 Agent key 列表。
+
+        每 5 秒輪詢一次，若超過 receive_timeout 仍為 STATE_SENT 則標記為
+        STATE_TIMEOUT；所有 agent_keys 進入終態後返回。
+        """
         start = time.time()
         receive_deadline = start + task.receive_timeout
         process_deadline = start + task.receive_timeout + task.process_timeout
