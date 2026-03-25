@@ -1,23 +1,25 @@
 """
 Polygon.io 期權數據獲取
 
-支援版本：
-  - 免費版（默認）：`POLYGON_API_TIER=free` 或未設定
-  - Pro 版：`POLYGON_API_TIER=pro`
+環境變數：
+  POLYGON_API_KEY  — API Key
+  POLYGON_API_TIER — free（默認）或 pro
+
+功能：
+  - 60s 記憶體快取（相同標的+到期日不重複請求）
+  - 指數退讓 + 429 rate limit 處理
+  - ITM/OTM/ATM 自動判定
+  - generator 永遠轉 list（避免一次性問題）
 
 版本區分邏輯：
-  - Pro：`list_options_contracts` 返回 ListResponse 對象，屬性 `.results` 是 list
-  - Free：返回普通 list，直接迭代
-
-環境變數：
-  POLYGON_API_KEY   — API Key（必要）
-  POLYGON_API_TIER  — `free`（默認）或 `pro`
+  - Pro 版：返回 ListResponse 對象，屬性 `.results` 是 list
+  - Free 版：返回普通 list，直接迭代
 """
 import os
-import sys
+import time as _time_module
+import hashlib
 from typing import Optional
 from datetime import datetime, timedelta
-
 from polygon import RESTClient
 from .logger import setup_logger
 
@@ -26,6 +28,44 @@ log = setup_logger("options_fetcher")
 _client: Optional[RESTClient] = None
 _API_TIER: str = "free"
 
+# ── 快取（60s TTL）────────────────────────────
+_CACHE: dict = {}
+_CACHE_TTL: float = 60.0
+
+
+def _ts() -> float:
+    """當前時間浮點數（避免 time 參數 shadow）"""
+    return _time_module.time()
+
+
+def _sleep(seconds: float):
+    """sleep（避免 time 參數 shadow）"""
+    _time_module.sleep(seconds)
+
+
+def _cache_key(prefix: str, **kwargs) -> str:
+    parts = [prefix] + [
+        f"{k}={sorted(v) if isinstance(v, list) else v}"
+        for k, v in sorted(kwargs.items())
+    ]
+    return hashlib.md5("|".join(parts).encode()).hexdigest()
+
+
+def _get_cached(key: str):
+    if key not in _CACHE:
+        return None
+    entry = _CACHE[key]
+    if _ts() - entry["ts"] > _CACHE_TTL:
+        del _CACHE[key]
+        return None
+    return entry["data"]
+
+
+def _set_cached(key: str, data):
+    _CACHE[key] = {"data": data, "ts": _ts()}
+
+
+# ── 客戶端初始化 ────────────────────────────────
 
 def _init_client() -> RESTClient:
     """初始化並快取 Polygon 客戶端"""
@@ -41,162 +81,178 @@ def _init_client() -> RESTClient:
     return _client
 
 
-def _to_contract_list(resp) -> list:
-    """
-    統一響應轉換為 list（永遠返回 list，可安全重複迭代）
-
-    支持類型：
-      - list：直接返回
-      - generator / iterator：完全迭代後返回 list（避免一次性問題）
-      - Pro 回應對象（有 .results）：迭代 .results 返回 list
-    """
-    # Pro 版：回應對象有 .results
+def _to_list(resp) -> list:
+    """永遠返回 list，避免 generator 一次性問題"""
     if hasattr(resp, "results") and not isinstance(resp, (list, tuple, set, frozenset)):
         try:
-            it = iter(resp.results)
+            return list(resp.results)
         except (TypeError, AttributeError):
-            it = iter([])
-        return list(it)
-
-    # 已是 list / tuple / set
-    if isinstance(resp, (list, tuple, set, frozensist)):
+            return []
+    if isinstance(resp, (list, tuple, set, frozenset)):
         return list(resp)
-
-    # generator / iterator：完全迭代後轉 list（關鍵修復！）
     try:
-        it = iter(resp)
-        return list(it)
+        return list(resp)
     except TypeError:
-        pass
-
-    raise TypeError(
-        f"無法解析 Polygon 回應類型，期望 list/generator，實際：{type(resp).__name__}。"
-        f"請確認 POLYGON_API_TIER 是否正確（當前：{_API_TIER}）"
-    )
+        raise TypeError(f"無法解析 Polygon 回應：{type(resp).__name__}")
 
 
 def _stock_to_underlying(ticker: str) -> str:
-    """股票代碼標準化"""
     t = ticker.upper().replace("-", "")
-    if "-USD" in ticker.upper():
-        return t
-    return t
+    return t if "-USD" in ticker.upper() else t
 
+
+# ── 通用：帶指數退讓的 API 請求 ───────────────
+
+def _get_with_retry(method: str, **kwargs) -> Optional[list]:
+    """
+    請求封裝：附帶指數退讓 + 429 處理
+    最多 4 次：1s → 2s → 4s → 8s
+    """
+    attempt = 0
+    max_attempts = 4
+    while attempt < max_attempts:
+        try:
+            client = _init_client()
+            resp = getattr(client, method)(**kwargs)
+            return _to_list(resp)
+        except Exception as e:
+            err = str(e).lower()
+            if "429" in err or "rate" in err or "too many" in err:
+                wait = 2 ** attempt
+                log.warning(f"Rate limit（{attempt+1}/{max_attempts}），等 {wait}s...")
+                _sleep(wait)
+                attempt += 1
+                continue
+            log.error(f"API 錯誤 [{method}]：{e}")
+            return None
+    log.error(f"API 請求全部失敗（{max_attempts} 次）")
+    return None
+
+
+# ── 取得標的現價 ─────────────────────────────
+
+def _get_underlying_price(ticker: str) -> float:
+    """用 get_previous_close 取得前一交易日收盤價（快取 60s）"""
+    key = _cache_key("price", ticker=ticker)
+    cached = _get_cached(key)
+    if cached is not None:
+        return cached
+    sym = _stock_to_underlying(ticker)
+    resp = _get_with_retry("get_previous_close_agg", ticker=sym)
+    price = 0.0
+    if resp:
+        try:
+            if hasattr(resp[0], 'close'):
+                price = float(resp[0].close)
+            else:
+                price = float(resp[0].get("c") or resp[0].get("close") or 0)
+        except (KeyError, IndexError, TypeError, AttributeError):
+            pass
+    _set_cached(key, price)
+    if price:
+        log.info(f"現價 {sym} = ${price}")
+    return price
+
+
+# ── 公開 API ───────────────────────────────────
 
 def get_option_expirations(ticker: str) -> list[dict]:
     """
-    取得股票的所有期權到期日
-
-    輸入：ticker: str  — 股票代碼，例如 "AAPL"、"TSLA"
-    輸出：list[dict]  — 每項含 {"date": "YYYY-MM-DD", "days_to_expiry": int}
+    取得股票所有期權到期日（快取 60s）
+    返回：[{date: str, days_to_expiry: int}, ...]
     """
-    client = _init_client()
+    key = _cache_key("expirations", ticker=ticker)
+    cached = _get_cached(key)
+    if cached is not None:
+        return cached
     sym = _stock_to_underlying(ticker)
-    try:
-        resp = client.list_options_contracts(
-            underlying_ticker=sym,
-            expiration_date_gte=datetime.utcnow().strftime("%Y-%m-%d"),
-            expiration_date_lte=(datetime.utcnow() + timedelta(days=365)).strftime("%Y-%m-%d"),
-            limit=500,
-        )
-    except Exception as e:
-        log.error(f"[get_option_expirations] API 調用失敗：{e}")
+    resp = _get_with_retry(
+        "list_options_contracts",
+        underlying_ticker=sym,
+        expiration_date_gte=datetime.utcnow().strftime("%Y-%m-%d"),
+        expiration_date_lte=(datetime.utcnow() + timedelta(days=180)).strftime("%Y-%m-%d"),
+        limit=500,
+    )
+    if resp is None:
         return []
-
-    contracts = _to_contract_list(resp)
     expirations: dict = {}
-    for c in contracts:
+    for c in resp:
         if not c or not isinstance(c, dict):
             continue
         exp = c.get("expiration_date")
-        if not exp:
+        if not exp or exp in expirations:
             continue
-        if exp not in expirations:
-            expirations[exp] = {
-                "date": exp,
-                "days_to_expiry": max(0, (datetime.strptime(exp, "%Y-%m-%d") - datetime.utcnow()).days),
-            }
-
+        try:
+            days = max(0, (datetime.strptime(exp, "%Y-%m-%d") - datetime.utcnow()).days)
+        except Exception:
+            days = 0
+        expirations[exp] = {"date": exp, "days_to_expiry": days}
     result = sorted(expirations.values(), key=lambda x: x["date"])
+    _set_cached(key, result)
     log.info(f"[get_option_expirations] {sym} → {len(result)} 個到期日")
     return result
 
 
 def get_option_chain(ticker: str, expiration_date: str) -> dict:
     """
-    取得指定到期日的完整期權鏈
-
-    輸入：
-      ticker: str          — 股票代碼，例如 "AAPL"
-      expiration_date: str — 到期日，格式 "YYYY-MM-DD"
-    輸出：dict — {
-        "calls": list[dict],
-        "puts":  list[dict],
-        "underlying_price": float,
-        "expiry": str,
-      }
-      每個合約項含：{strike, last, iv, oi, delta, gamma, theta, vega, itm, intrinsic, premium}
+    取得指定到期日的完整期權鏈（快取 60s）
+    返回：{calls: [], puts: [], underlying_price: float, expiry: str}
     """
-    client = _init_client()
+    key = _cache_key("chain", ticker=ticker, expiry=expiration_date)
+    cached = _get_cached(key)
+    if cached is not None:
+        return cached
     sym = _stock_to_underlying(ticker)
-
-    underlying_price: float = 0.0
-    try:
-        ticker_resp = client.get_ticker(sym)
-        underlying_price = float(ticker_resp.last.price)
-    except Exception as e:
-        log.warning(f"[get_option_chain] 取得標的現價失敗：{e}")
-
-    try:
-        resp = client.list_options_contracts(
-            underlying_ticker=sym,
-            expiration_date=expiration_date,
-            limit=1000,
-        )
-    except Exception as e:
-        log.error(f"[get_option_chain] 取得期權合約列表失敗：{e}")
-        return {"calls": [], "puts": [], "underlying_price": underlying_price, "expiry": expiration_date}
-
-    contracts = _to_contract_list(resp)
+    underlying_price = _get_underlying_price(sym)
+    resp = _get_with_retry(
+        "list_options_contracts",
+        underlying_ticker=sym,
+        expiration_date=expiration_date,
+        limit=500,
+    )
     calls, puts = [], []
-
-    for c in contracts:
-        if not c or not isinstance(c, dict):
-            continue
-        strike: float = float(c.get("strike_price") or 0)
-        ct: str = c.get("contract_type", "")
-        if ct == "call":
-            calls.append(_build_entry(c, underlying_price, strike))
-        elif ct == "put":
-            puts.append(_build_entry(c, underlying_price, strike))
-
+    if resp:
+        for c in resp:
+            if not c or not isinstance(c, dict):
+                continue
+            strike = float(c.get("strike_price") or 0)
+            ct = c.get("contract_type", "")
+            entry = _build_entry(c, underlying_price, strike)
+            if ct == "call":
+                calls.append(entry)
+            elif ct == "put":
+                puts.append(entry)
     calls.sort(key=lambda x: x["strike"])
     puts.sort(key=lambda x: x["strike"])
-    log.info(f"[get_option_chain] {sym} {expiration_date} → {len(calls)} calls, {len(puts)} puts")
-    return {
+    result = {
         "calls": calls,
         "puts": puts,
         "underlying_price": underlying_price,
         "expiry": expiration_date,
     }
+    _set_cached(key, result)
+    log.info(f"[get_option_chain] {sym} {expiration_date} → {len(calls)} calls, {len(puts)} puts")
+    return result
 
 
 def _build_entry(c: dict, underlying_price: float, strike: float) -> dict:
-    """
-    將 Polygon 合約 dict 轉換為統一格式
-    輸入：c: dict, underlying_price: float, strike: float
-    輸出：dict — 含所有 Greeks + 報價欄位
-    """
-    last_price: float = float(c.get("last_trade_price") or c.get("last") or 0)
-    iv: float = float(c.get("implied_volatility") or 0)
-    oi: int = int(c.get("open_interest") or 0)
-    delta_val: float = float(c.get("delta") or 0)
-    gamma_val: float = float(c.get("gamma") or 0)
-    theta_val: float = float(c.get("theta") or 0)
-    vega_val: float = float(c.get("vega") or 0)
-    ct: str = c.get("contract_type", "")
-    itm = "ITM" if underlying_price > strike else ("OTM" if underlying_price < strike else "ATM")
-    intrinsic = max(0, underlying_price - strike) if ct == "call" else max(0, strike - underlying_price)
+    last_price = float(c.get("last_trade_price") or c.get("last") or 0)
+    iv = float(c.get("implied_volatility") or 0)
+    oi = int(c.get("open_interest") or 0)
+    delta_val = float(c.get("delta") or 0)
+    gamma_val = float(c.get("gamma") or 0)
+    theta_val = float(c.get("theta") or 0)
+    vega_val = float(c.get("vega") or 0)
+    ct = c.get("contract_type", "")
+    if ct == "call":
+        itm = "ITM" if underlying_price > strike else ("OTM" if underlying_price < strike else "ATM")
+        intrinsic = max(0.0, underlying_price - strike)
+    elif ct == "put":
+        itm = "ITM" if underlying_price < strike else ("OTM" if underlying_price > strike else "ATM")
+        intrinsic = max(0.0, strike - underlying_price)
+    else:
+        itm = "?"
+        intrinsic = 0.0
     return {
         "strike": strike,
         "last": last_price,
@@ -215,36 +271,21 @@ def _build_entry(c: dict, underlying_price: float, strike: float) -> dict:
 def build_options_wall(ticker: str, expiration_date: str) -> dict:
     """
     構建期權牆（OI Wall）
-    輸入：ticker: str, expiration_date: str
-    輸出：dict — {
-        "ticker": str,
-        "expiry": str,
-        "underlying_price": float,
-        "atm_strike": float,
-        "oi_wall": dict | None,
-        "total_calls_oi": int,
-        "total_puts_oi": int,
-        "calls": list,
-        "puts": list,
-      }
+    返回：{ticker, expiry, underlying_price, atm_strike, oi_wall,
+           total_calls_oi, total_puts_oi, calls, puts}
     """
     chain = get_option_chain(ticker, expiration_date)
     underlying_price = chain.get("underlying_price", 0)
-    calls = chain.get("calls", [])
-    puts = chain.get("puts", [])
-
-    all_oi = []
-    for c in calls:
-        if c["oi"] > 0:
-            all_oi.append({"strike": c["strike"], "oi": c["oi"], "type": "call"})
-    for p in puts:
-        if p["oi"] > 0:
-            all_oi.append({"strike": p["strike"], "oi": p["oi"], "type": "put"})
-
+    calls, puts = chain.get("calls", []), chain.get("puts", [])
+    all_oi = (
+        [{"strike": c["strike"], "oi": c["oi"], "type": "call"} for c in calls if c["oi"] > 0]
+        + [{"strike": p["strike"], "oi": p["oi"], "type": "put"}  for p in puts if p["oi"] > 0]
+    )
     oi_wall = max(all_oi, key=lambda x: x["oi"]) if all_oi else None
     all_strikes = sorted({c["strike"] for c in calls} | {p["strike"] for p in puts})
-    atm_strike = float(min(all_strikes, key=lambda s: abs(s - underlying_price))) if underlying_price and all_strikes else 0.0
-
+    atm_strike = 0.0
+    if underlying_price and all_strikes:
+        atm_strike = float(min(all_strikes, key=lambda s: abs(s - underlying_price)))
     return {
         "ticker": ticker.upper(),
         "expiry": expiration_date,
