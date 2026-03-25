@@ -1,12 +1,11 @@
 # ─────────────────────────────────────────────
 # Market Monitor 設定檔
 # ⚠️ Token 請在 Railway 環境變數設定，不要寫在這裡
-# Bot Token 在 Railway 環境變數設定，不在此檔
 # ─────────────────────────────────────────────
 
 monitor:
-  interval_minutes: 15    # 檢查間隔（分鐘）
-  summary_interval: 60    # 摘要報告間隔（分鐘）
+  interval_minutes: 15
+  summary_interval: 60
 
 symbols:
   stocks:
@@ -18,23 +17,15 @@ symbols:
         - type: "rsi_overbought"
           threshold: 70
           cooldown_hours: 6
-        - type: "macd_cross_up"
-          cooldown_hours: 6
-        - type: "price_cross_ma200"
-          cooldown_hours: 12
     - symbol: "TSLA"
       alerts:
         - type: "rsi_overbought"
           threshold: 70
           cooldown_hours: 6
-        - type: "macd_cross_down"
-          cooldown_hours: 6
     - symbol: "AAPL"
       alerts:
         - type: "macd_cross_up"
           cooldown_hours: 6
-        - type: "price_cross_ma200"
-          cooldown_hours: 12
     - symbol: "SPY"
       alerts:
         - type: "price_cross_ma200"
@@ -54,24 +45,12 @@ symbols:
         - type: "rsi_overbought"
           threshold: 70
           cooldown_hours: 4
-        - type: "bollinger_lower"
-          cooldown_hours: 6
-        - type: "bollinger_upper"
-          cooldown_hours: 6
     - symbol: "ETH-USD"
       alerts:
         - type: "rsi_oversold"
           threshold: 30
           cooldown_hours: 4
-        - type: "rsi_overbought"
-          threshold: 70
-          cooldown_hours: 4
-        - type: "macd_cross_up"
-          cooldown_hours: 6
     - symbol: "SOL-USD"
       alerts:
-        - type: "rsi_oversold"
-          threshold: 30
-          cooldown_hours: 4
         - type: "macd_cross_up"
           cooldown_hours: 6

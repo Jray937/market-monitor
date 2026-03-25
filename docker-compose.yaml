@@ -1,5 +1,10 @@
 version: "3.8"
 
+# Market Monitor - 多 Agent 部署
+# 使用方式：
+#   單一模式：docker compose up
+#   多 Agent 模式：AGENT_MODE=multi docker compose up
+
 services:
   market-monitor:
     build: .
@@ -10,4 +15,24 @@ services:
     environment:
       - CONFIG_PATH=/app/config.yaml
       - STATE_FILE=/app/alert_state.json
+      # AI API 配置（MiniMax）
+      - MINIMAX_API_KEY=${MINIMAX_API_KEY:-}
+      - MINIMAX_API_BASE_URL=${MINIMAX_API_BASE_URL:-https://api.minimax.io/anthropic}
+      - MINIMAX_MODEL=${MINIMAX_MODEL:-MiniMax-M2.7}
+      # 代理設置（如果需要的話）
+      - HTTPS_PROXY=${HTTPS_PROXY:-}
+      - HTTP_PROXY=${HTTP_PROXY:-}
+      # 單一模式
+      - DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN:-}
+      - DISCORD_CHANNEL_ID=${DISCORD_CHANNEL_ID:-}
+      # 多 Agent 模式
+      - AGENT_MODE=${AGENT_MODE:-single}
+      # 各 Agent 的 Discord Token（從 config.yaml 的 token_env 引用）
+      - CHIEF_STRATEGIST_TOKEN=${CHIEF_STRATEGIST_TOKEN:-}
+      - SECTOR_ANALYST_TOKEN=${SECTOR_ANALYST_TOKEN:-}
+      - TRADER_TOKEN=${TRADER_TOKEN:-}
+      - MACRO_STRATEGIST_TOKEN=${MACRO_STRATEGIST_TOKEN:-}
+      - INTELLIGENCE_OFFICER_TOKEN=${INTELLIGENCE_OFFICER_TOKEN:-}
+      - RISK_OFFICER_TOKEN=${RISK_OFFICER_TOKEN:-}
+      - QUANT_STRATEGIST_TOKEN=${QUANT_STRATEGIST_TOKEN:-}
     # Railway / Render 支援：直接 CMD

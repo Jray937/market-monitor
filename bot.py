@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Market Monitor Bot — 主入口
-直接啟動 Discord Bot（discord_bot.py）
+Market Monitor Bot — 多 Bot 協調架構
+Railway 1 個服務，運行 7 個 Discord Bot（分散式執行緒）
 """
 from src.discord_bot import main
 
