@@ -1,67 +1,124 @@
 """
-Discord Bot（discord.py）
+Discord Bot — 多 Bot 協調架構
 功能：
-  - /狀態  查看所有監控標的當前技術指標
-  - /查詢  <SYMBOL>  查單一標的詳細分析
-  - /新增  <SYMBOL> <警報類型>  新增監控標的（暫存，重啟需重設）
-  - 背景監控  每 N 分鐘自動檢查並發送警報
-  - 每小時摘要  在指定頻道自動推送
+  - Railway 1 個服務
+  - 7 個 Discord Bot（各自分散式運行）
+  - Leader Bot 接收需求，發任務到團隊頻道
+  - 各 Agent Bot 監聽團隊頻道，分析並回傳
+  - Leader Bot 彙總回覆給用戶
 
-使用 discord.py + 環境變數，Token 不進 GitHub
+使用 discord.py + MiniMax API
 """
 import os
 import sys
 import re
 import time
+import asyncio
 import threading
 import datetime
-import requests
 import discord
 from discord import app_commands
-from discord.ext import commands, tasks
+from typing import Optional
 
 # ── 本地模組 ──
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from src.config import load_config, parse_config, SymbolConfig, AlertRule
 from src.data_fetcher import fetch_ohlcv
-from src.analyzer import compute_ta, check_alert
-from src.alert_manager import AlertManager
+from src.analyzer import compute_ta
 
 # ── 日誌 ──
 from src.logger import setup_logger
 log = setup_logger("discord_bot")
 
-# ── 全域狀態 ──
-alert_mgr: AlertManager | None = None
-symbols_cfg: list[SymbolConfig] = []
-monitor_interval: int = 15
-_channel_id: int | None = None
+# ══════════════════════════════════════════════════════
+# Agent 定義
+# ══════════════════════════════════════════════════════
 
-# ── Discord Intents ──
-intents = discord.Intents.default()
-intents.message_content = True   # 讀取命令訊息
-client = discord.Client(intents=intents)
-tree = app_commands.CommandTree(client)
+TEAM_AGENTS = {
+    "trader": {
+        "name": "交易員",
+        "emoji": "📊",
+        "focus": "技術分析、進出场點位",
+        "system_prompt": """你是一位專業的交易員，專注於短線和波段交易。
+當收到分析任務時，請根據技術指標數據給出：
+1. 趨勢判斷（多頭/空頭/震盪）
+2. 關鍵支撐阻力位
+3. 進場/止損/目標價建議
+4. 持有時間框架
+保持簡潔，專業，給出具體數字。""",
+    },
+    "sector_analyst": {
+        "name": "行業研究員",
+        "emoji": "📈",
+        "focus": "基本面、行業、估值",
+        "system_prompt": """你是一位資深的行業研究分析師。
+當收到分析任務時，請根據技術指標數據給出：
+1. 基本面簡評
+2. 估值判斷（貴/合理/便宜）
+3. 投資評級（買入/持有/減持）
+4. 主要風險
+保持簡潔，專業，有數據支撐。""",
+    },
+    "macro_strategist": {
+        "name": "宏觀策略師",
+        "emoji": "🌍",
+        "focus": "宏觀經濟、政策影響",
+        "system_prompt": """你是一位頂級的宏觀經濟策略分析師。
+當收到分析任務時，請給出：
+1. 宏觀背景分析
+2. 板塊順風/逆風因素
+3. 利率、通脹、政策影響
+4. 主要風險情景
+保持簡潔，有大局觀。""",
+    },
+    "intelligence_officer": {
+        "name": "情報官",
+        "emoji": "📰",
+        "focus": "新聞、情緒、消息面",
+        "system_prompt": """你是一位敏銳的市場情報分析師。
+當收到分析任務時，請根據技術指標給出：
+1. 近期重要新聞觀察
+2. 市場情緒判斷
+3. 信息面風險和機會
+保持簡潔，敏銳，注重事實。""",
+    },
+    "risk_officer": {
+        "name": "風控官",
+        "emoji": "⚠️",
+        "focus": "風險評估、倉位建議",
+        "system_prompt": """你是一位嚴格的風險控制專家。
+當收到分析任務時，請根據技術指標給出：
+1. 波動率風險評估
+2. 下行空間分析
+3. 合理倉位建議
+4. 風險預警
+保持簡潔，直接，注重風險。""",
+    },
+    "quant_strategist": {
+        "name": "量化策略師",
+        "emoji": "🔢",
+        "focus": "量化信號、統計分析",
+        "system_prompt": """你是一位量化投資策略師。
+當收到分析任務時，請根據技術指標給出：
+1. 量化視角分析
+2. 統計規律識別
+3. 動量和趨勢強度
+4. 量化信號評分
+保持簡潔，數據驅動。""",
+    },
+}
+
 
 # ══════════════════════════════════════════════════════
 # 工具函式
 # ══════════════════════════════════════════════════════
 
-def make_embed(
-    title: str,
-    description: str = "",
-    color: int = 0x7289DA,
-    fields: list = None,
-    footer: str = None,
-    timestamp: bool = True,
-) -> discord.Embed:
+def make_embed(title, description="", color=0x7289DA, fields=None, footer=None):
     embed = discord.Embed(title=title, description=description, color=color)
     for f in (fields or []):
         embed.add_field(name=f["name"], value=f["value"], inline=f.get("inline", False))
     if footer:
         embed.set_footer(text=footer)
-    if timestamp:
-        embed.timestamp = datetime.datetime.utcnow()
+    embed.timestamp = datetime.datetime.utcnow()
     return embed
 
 def fmt_price(price: float) -> str:
@@ -70,654 +127,401 @@ def fmt_price(price: float) -> str:
 def fmt_pct(pct: float) -> str:
     return f"{'📈' if pct >= 0 else '📉'} {pct:+.2f}%"
 
-def ta_summary_fields(ta) -> list:
-    fields = []
-    if ta.rsi14 is not None:
-        rsi_emoji = "🔴" if ta.rsi14 > 70 else "🟢" if ta.rsi14 < 30 else "⚪"
-        fields.append({"name": "RSI(14)", "value": f"{rsi_emoji} `{ta.rsi14:.1f}`", "inline": True})
-    if ta.macd is not None:
-        hist = ta.macd - ta.macd_signal
-        emoji = "🟢" if hist > 0 else "🔴"
-        fields.append({"name": "MACD", "value": f"{emoji} `{ta.macd:.4f}`", "inline": True})
-    if ta.sma200 is not None:
-        above = "✅" if ta.current_price > ta.sma200 else "⚠️"
-        fields.append({"name": "MA200", "value": f"{above} `{fmt_price(ta.sma200)}`", "inline": True})
-    if ta.bb_upper is not None:
-        fields.append({"name": "布林帶", "value": f"`{fmt_price(ta.bb_lower)}` ~ `{fmt_price(ta.bb_upper)}`", "inline": False})
-    return fields
-
-def color_for_signal(ta) -> int:
-    if ta.rsi14 and ta.rsi14 > 70:   return 0xFF8C00  # 超買橙色
-    if ta.rsi14 and ta.rsi14 < 30:   return 0x00C851  # 超賣綠（反彈）
-    if ta.above_ma200:                return 0x00C851  # 多頭綠
-    if ta.below_ma200:                return 0xFF4444  # 空頭紅
-    return 0x7289DA  # 默認藍
 
 # ══════════════════════════════════════════════════════
-# 背景監控任務
+# AI 調用
 # ══════════════════════════════════════════════════════
 
-@tasks.loop(minutes=15)
-async def monitor_job():
-    """每15分鐘自動執行的市場監控"""
-    await client.wait_until_ready()
-    if _channel_id is None:
-        log.warning("未設定監控頻道，跳過本輪")
-        return
-    log.info("=== 自動監控輪次開始 ===")
-    channel = client.get_channel(_channel_id)
-    if channel is None:
-        log.error(f"找不到頻道 {_channel_id}")
-        return
+async def call_minimax(system_prompt: str, user_message: str) -> str:
+    """調用 MiniMax API"""
+    import anthropic
 
-    from concurrent.futures import ThreadPoolExecutor
-    results = []
+    api_key = os.environ.get("MINIMAX_API_KEY")
+    if not api_key:
+        return "⚠️ 未設定 MINIMAX_API_KEY"
 
-    def do_monitor(cfg: SymbolConfig):
-        sym = cfg.symbol
-        df = fetch_ohlcv(sym, period="6mo", interval="1d")
+    base_url = os.environ.get("MINIMAX_API_BASE_URL", "https://api.minimaxi.com/anthropic")
+    model = os.environ.get("MINIMAX_MODEL", "MiniMax-M2.7")
+    proxy = os.environ.get("HTTPS_PROXY") or os.environ.get("HTTP_PROXY")
+
+    try:
+        client = anthropic.Anthropic(
+            api_key=api_key,
+            base_url=base_url,
+            http_proxy=proxy if proxy else None,
+            https_proxy=proxy if proxy else None,
+        )
+
+        response = client.messages.create(
+            model=model,
+            max_tokens=1024,
+            system=system_prompt,
+            messages=[{"role": "user", "content": user_message}],
+        )
+
+        return response.content[0].text if response.content else "⚠️ 無回應"
+
+    except Exception as e:
+        log.error(f"❌ MiniMax API 錯誤：{e}")
+        return f"⚠️ 分析失敗"
+
+
+def get_ta_summary(symbol: str) -> Optional[str]:
+    """獲取標的的技術分析摘要"""
+    try:
+        df = fetch_ohlcv(symbol, period="6mo", interval="1d")
         if df.empty:
             return None
-        ta = compute_ta(sym, df)
+        ta = compute_ta(symbol, df)
         if ta is None:
             return None
-        # 檢查警報
-        for rule in cfg.alerts:
-            if alert_mgr and alert_mgr.is_in_cooldown(sym, rule.type):
-                continue
-            triggered, msg = check_alert(ta, rule.type, rule.threshold)
-            if triggered:
-                _send_alert_to_channel(channel, ta, rule)
-                alert_mgr.record_trigger(sym, rule.type, rule.cooldown_hours)
-        return {"symbol": sym, "ta": ta}
 
-    with ThreadPoolExecutor(max_workers=6) as ex:
-        futures = [ex.submit(do_monitor, cfg) for cfg in symbols_cfg]
-        for f in futures:
-            r = f.result()
-            if r:
-                results.append(r)
+        parts = [f"💰 價格：{fmt_price(ta.current_price)} {fmt_pct(ta.pct_change)}"]
 
-    # 每4小時摘要
-    if int(time.time()) % 14400 < monitor_interval * 60:
-        await send_summary_to_channel(channel, results)
+        if ta.rsi14 is not None:
+            state = "超買" if ta.rsi14 > 70 else "超賣" if ta.rsi14 < 30 else "中性"
+            parts.append(f"📊 RSI(14)：{ta.rsi14:.1f}（{state}）")
 
-    log.info(f"=== 自動監控完成，{len(results)} 檔 ===")
+        if ta.macd is not None and ta.macd_signal is not None:
+            hist = ta.macd - ta.macd_signal
+            state = "金叉" if hist > 0 else "死叉"
+            parts.append(f"📈 MACD：{ta.macd:.4f}（{state}）")
 
+        if ta.sma200 is not None:
+            diff = (ta.current_price - ta.sma200) / ta.sma200 * 100
+            state = "▲" if diff > 0 else "▼"
+            parts.append(f"📐 MA200：{fmt_price(ta.sma200)}（{state}{abs(diff):.1f}%）")
 
-def _send_alert_to_channel(channel, ta, rule):
-    color_map = {
-        "rsi_oversold":   0x00C851,
-        "rsi_overbought": 0xFF8C00,
-        "macd_cross_up":  0x00C851,
-        "macd_cross_down":0xFF4444,
-        "price_cross_ma200":"0x7289DA",
-        "bollinger_upper":0x00C851,
-        "bollinger_lower":0xFF4444,
-    }
-    emoji_map = {
-        "rsi_oversold":   "📉",
-        "rsi_overbought": "📈",
-        "macd_cross_up":  "✅",
-        "macd_cross_down": "🔴",
-        "price_cross_ma200":"🚀",
-        "bollinger_upper": "💥",
-        "bollinger_lower": "📍",
-    }
-    name_map = {
-        "rsi_oversold":   "RSI 超賣",
-        "rsi_overbought": "RSI 超買",
-        "macd_cross_up":  "MACD 金叉",
-        "macd_cross_down": "MACD 死叉",
-        "price_cross_ma200":"MA200 均線交叉",
-        "bollinger_upper": "布林上軌突破",
-        "bollinger_lower": "布林下軌跌破",
-    }
-    embed = make_embed(
-        title=f"{emoji_map.get(rule.type,'⚠️')} [{ta.symbol}] {name_map.get(rule.type, rule.type)}",
-        description=f"💰 **{fmt_price(ta.current_price)}**  ({fmt_pct(ta.pct_change)})",
-        color=color_map.get(rule.type, 0xFF6B6B),
-        fields=ta_summary_fields(ta),
-        footer=f"Market Monitor | {ta.symbol}",
-    )
-    try:
-        from discord import Guild
-        coro = channel.send(embed=embed)
-        asyncio.run_coroutine_threadsafe(coro, client.loop)
+        if ta.bb_upper is not None and ta.bb_lower is not None:
+            parts.append(f"📐 布林帶：{fmt_price(ta.bb_lower)} ~ {fmt_price(ta.bb_upper)}")
+
+        return "\n".join(parts)
     except Exception as e:
-        log.error(f"發送警報失敗: {e}")
-
-
-def _ta_detail_line(ta) -> str:
-    """生成單一資產的詳細技術分析一行文字"""
-    parts = []
-
-    # RSI
-    if ta.rsi14 is not None:
-        rsi_state = "超買" if ta.rsi14 > 70 else "超賣" if ta.rsi14 < 30 else "中性"
-        parts.append(f"RSI={ta.rsi14:.1f}({rsi_state})")
-
-    # MACD
-    if ta.macd is not None and ta.macd_signal is not None:
-        hist = ta.macd - ta.macd_signal
-        macd_state = "金叉" if hist > 0 else "死叉"
-        parts.append(f"MACD={ta.macd:.3f}({macd_state})")
-
-    # MA200
-    if ta.sma200 is not None:
-        diff_pct = (ta.current_price - ta.sma200) / ta.sma200 * 100
-        above = "▲" if diff_pct > 0 else "▼"
-        parts.append(f"MA200={fmt_price(ta.sma200)}({above}{abs(diff_pct):.1f}%)")
-
-    # 布林帶
-    if ta.bb_upper is not None and ta.bb_lower is not None:
-        bb_pos = (ta.current_price - ta.bb_lower) / (ta.bb_upper - ta.bb_lower) * 100
-        bb_state = "上軌" if ta.current_price >= ta.bb_upper else "下軌" if ta.current_price <= ta.bb_lower else f"中{bb_pos:.0f}%"
-        parts.append(f"BB={bb_state}")
-
-    return " | ".join(parts) if parts else "數據不足"
-
-
-def _signal_conclusion(ta) -> str:
-    """根據技術指標給出結論"""
-    conclusions = []
-
-    # RSI 結論
-    if ta.rsi14 is not None:
-        if ta.rsi14 > 80:
-            conclusions.append("RSI 極度超買，回調風險高")
-        elif ta.rsi14 > 70:
-            conclusions.append("RSI 超買區域，警惕獲利了結")
-        elif ta.rsi14 < 20:
-            conclusions.append("RSI 極度超賣，強反彈可能")
-        elif ta.rsi14 < 30:
-            conclusions.append("RSI 超賣區域，留意反彈機會")
-        else:
-            conclusions.append(f"RSI 中性({ta.rsi14:.1f})，無明顯方向")
-
-    # MA200 結論
-    if ta.sma200 is not None:
-        if ta.current_price > ta.sma200:
-            pct = (ta.current_price - ta.sma200) / ta.sma200 * 100
-            conclusions.append(f"多頭格局，價格高於MA200 {pct:.1f}%")
-        else:
-            pct = (ta.sma200 - ta.current_price) / ta.sma200 * 100
-            conclusions.append(f"空頭格局，價格低於MA200 {pct:.1f}%")
-
-    # MACD 結論
-    if ta.macd is not None and ta.macd_signal is not None:
-        hist = ta.macd - ta.macd_signal
-        if hist > 0 and abs(hist) > 0.1:
-            conclusions.append("MACD 開口向上，多方動能強")
-        elif hist < 0 and abs(hist) > 0.1:
-            conclusions.append("MACD 開口向下，空方動能強")
-        elif abs(hist) <= 0.05:
-            conclusions.append("MACD 交叉附近，方向待確認")
-
-    # 布林帶結論
-    if ta.bb_upper is not None and ta.bb_lower is not None:
-        bandwidth = ta.bb_upper - ta.bb_lower
-        if ta.current_price >= ta.bb_upper:
-            conclusions.append("價格突破布林上軌，強勢運行關注回調")
-        elif ta.current_price <= ta.bb_lower:
-            conclusions.append("價格跌破布林下軌，弱勢運行關注支撐")
-        elif bandwidth < ta.bb_lower * 0.03:
-            conclusions.append("布林帶收窄，突破機會將至")
-
-    return " • ".join(conclusions) if conclusions else "綜合指標無明確信號"
-
-
-async def send_summary_to_channel(channel, results: list):
-    if not results:
-        return
-
-    # 分類
-    bullish, overbought, bearish, neutral = [], [], [], []
-    for r in results:
-        sym = r["symbol"]
-        ta = r["ta"]
-        if ta.above_ma200 and ta.current_price > (ta.sma50 or float("inf")):
-            bullish.append(r)
-        elif ta.rsi14 and ta.rsi14 > 70:
-            overbought.append(r)
-        elif ta.below_ma200 and ta.current_price < (ta.sma50 or 0):
-            bearish.append(r)
-        else:
-            neutral.append(r)
-
-    now = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
-    embed = make_embed(
-        title=f"📋 市場摘要 · {now[11:]}",
-        description=f"共監控 **{len(results)}** 檔資產 | 每4小時更新",
-        color=0x7289DA,
-        fields=[],
-        footer="Market Monitor 每4小時摘要",
-    )
-
-    # 多頭訊號
-    if bullish:
-        lines = []
-        for r in bullish:
-            ta = r["ta"]
-            detail = _ta_detail_line(ta)
-            conclusion = _signal_conclusion(ta)
-            lines.append(f"**{r['symbol']}** {fmt_price(ta.current_price)} {fmt_pct(ta.pct_change)}\n{detail}\n→ {conclusion}")
-        embed.add_field(
-            name="🟢 多頭訊號",
-            value="\n\n".join(lines)[:1024],
-            inline=False
-        )
-
-    # 超買警告
-    if overbought:
-        lines = []
-        for r in overbought:
-            ta = r["ta"]
-            detail = _ta_detail_line(ta)
-            conclusion = _signal_conclusion(ta)
-            lines.append(f"**{r['symbol']}** {fmt_price(ta.current_price)} {fmt_pct(ta.pct_change)}\n{detail}\n→ {conclusion}")
-        embed.add_field(
-            name="🔥 超買警告",
-            value="\n\n".join(lines)[:1024],
-            inline=False
-        )
-
-    # 空頭訊號
-    if bearish:
-        lines = []
-        for r in bearish:
-            ta = r["ta"]
-            detail = _ta_detail_line(ta)
-            conclusion = _signal_conclusion(ta)
-            lines.append(f"**{r['symbol']}** {fmt_price(ta.current_price)} {fmt_pct(ta.pct_change)}\n{detail}\n→ {conclusion}")
-        embed.add_field(
-            name="🔴 空頭訊號",
-            value="\n\n".join(lines)[:1024],
-            inline=False
-        )
-
-    # 中性觀望
-    if neutral:
-        lines = []
-        for r in neutral:
-            ta = r["ta"]
-            detail = _ta_detail_line(ta)
-            conclusion = _signal_conclusion(ta)
-            lines.append(f"**{r['symbol']}** {fmt_price(ta.current_price)} {fmt_pct(ta.pct_change)}\n{detail}\n→ {conclusion}")
-        embed.add_field(
-            name="⚪ 中性觀望",
-            value="\n\n".join(lines)[:1024],
-            inline=False
-        )
-
-    await channel.send(embed=embed)
+        log.error(f"❌ 獲取 {symbol} 技術數據失敗：{e}")
+        return None
 
 
 # ══════════════════════════════════════════════════════
-# Discord Bot 事件
+# Leader Bot（接收需求，分發任務，蒐集回覆）
 # ══════════════════════════════════════════════════════
 
-@client.event
-async def on_ready():
-    log.info(f"✅ Discord Bot 上線：{client.user} ({client.user.id})")
-    # 同步斜線命令
-    await tree.sync()
-    log.info("✅ 斜線命令已同步")
-    # 啟動背景監控
-    monitor_job.start()
-    # 發送上線通知
-    if _channel_id:
-        ch = client.get_channel(_channel_id)
-        if ch:
-            now = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+def run_leader_bot(bot_token: str, team_channel_id: int, user_channel_id: int = None):
+    """運行 Leader Bot"""
+    intents = discord.Intents.default()
+    intents.message_content = True
+    intents.dm_messages = True
+    intents.guild_messages = True
+
+    client = discord.Client(intents=intents)
+    tree = app_commands.CommandTree(client)
+
+    # 待完成的任務
+    pending_tasks = {}  # task_id -> {"symbol": str, "user_channel":, "reports": []}
+
+    def make_task_embed(symbol: str, task_id: str):
+        agent_list = "\n".join([f"{ag['emoji']} {ag['name']}" for ag in TEAM_AGENTS.values()])
+        return make_embed(
+            title=f"📋 團隊任務：分析 {symbol}",
+            description=f"請各 Agent 分析並回傳報告到本頻道\n\n參與成員：\n{agent_list}",
+            color=0xFFD700,
+            footer=f"任務ID：{task_id}",
+        )
+
+    def parse_agent_report(content: str):
+        """解析回傳格式：[Agent名稱] 任務ID 報告內容"""
+        match = re.match(r"\[([^\]]+)\]\s*(\S+)\s*(.+)", content, re.DOTALL)
+        if match:
+            return match.group(1).strip(), match.group(2).strip(), match.group(3).strip()
+        return None, None, None
+
+    @client.event
+    async def on_ready():
+        log.info(f"✅ Leader Bot 上線：{client.user}")
+        await tree.sync()
+        log.info("✅ 斜線命令已同步")
+
+        # 在團隊頻道發送上線消息
+        team_ch = client.get_channel(team_channel_id)
+        if team_ch:
             embed = make_embed(
-                title="✅ Market Monitor Bot 上線",
-                description=f"開始監控 **{len(symbols_cfg)}** 檔資產\n指令： `/幫助`",
-                color=0x7289DA,
-                fields=[
-                    {"name": "指令", "value": "`/狀態` `/查詢` `/幫助`", "inline": False},
-                    {"name": "技術指標", "value": "RSI · MACD · MA200 · 布林帶", "inline": False},
-                ],
-                footer=f"上線時間：{now}",
+                title="✅ Agent Leader 已上線",
+                description="開始接收分析需求",
+                color=0x00C851,
             )
-            await ch.send(embed=embed)
+            await team_ch.send(embed=embed)
 
+    @client.event
+    async def on_message(message: discord.Message):
+        if message.author.id == client.user.id:
+            return
 
-# ══════════════════════════════════════════════════════
-# 斜線命令
-# ══════════════════════════════════════════════════════
+        is_dm = isinstance(message.channel, discord.DMChannel)
+        is_mentioned = client.user in message.mentions
 
-@tree.command(name="幫助", description="顯示所有可用指令")
-async def cmd_help(interaction: discord.Interaction):
-    embed = make_embed(
-        title="📖 Market Monitor 指令列表",
-        color=0x7289DA,
-        fields=[
-            {"name": "/狀態", "value": "查看所有監控標的的當前技術指標", "inline": False},
-            {"name": "/查詢 <代號>", "value": "查詢單一標的詳細分析\n範例：`/查詢 NVDA`", "inline": False},
-            {"name": "/新增 <代號> <警報類型>", "value": "新增監控標的（需填警報類型）\n範例：`/新增 TSLA rsi_overbought`", "inline": False},
-            {"name": "/移除 <代號>", "value": "移除監控標的", "inline": False},
-            {"name": "/摘要", "value": "立即發送市場摘要報告", "inline": False},
-        ],
-        footer="警報觸發時自動發送通知，無需手動操作",
-    )
-    await interaction.response.send_message(embed=embed, ephemeral=False)
+        # 只處理 DM 或 @mention
+        if not (is_dm or is_mentioned):
+            return
 
+        # 解析標的
+        content = message.content.strip()
+        if is_mentioned:
+            content = re.sub(r"<@\d+>\s*", "", content)
 
-@tree.command(name="狀態", description="查看所有監控標的的當前技術指標")
-async def cmd_status(interaction: discord.Interaction):
-    await interaction.response.defer()
-    msg = await interaction.original_response()
+        symbols = re.findall(r'\b([A-Z]{2,5}(?:-USD)?)\b', content.upper())
+        if not symbols:
+            await message.channel.send("⚠️ 請指定要分析的標的，例如：`分析 NVDA`")
+            return
 
-    from concurrent.futures import ThreadPoolExecutor
-    rows = []
+        symbol = symbols[0]
+        task_id = f"task_{int(time.time() * 1000)}"
 
-    def fetch_one(cfg: SymbolConfig):
-        df = fetch_ohlcv(cfg.symbol, period="6mo", interval="1d")
-        if df.empty:
-            return None
-        ta = compute_ta(cfg.symbol, df)
-        return {"symbol": cfg.symbol, "market": cfg.market, "ta": ta}
-
-    with ThreadPoolExecutor(max_workers=6) as ex:
-        futures = [ex.submit(fetch_one, cfg) for cfg in symbols_cfg]
-        results = [f.result() for f in futures if f.result()]
-
-    if not results:
-        await interaction.followup.send("⚠️ 無法取得任何數據，請檢查網路或 Symbol 是否正確")
-        return
-
-    # 分頁：每個 embed 最少 3 欄
-    results.sort(key=lambda r: r["symbol"])
-    for r in results:
-        ta = r["ta"]
-        fields = ta_summary_fields(ta)
-        if not fields:
-            fields = [{"name": "狀態", "value": "數據不足", "inline": False}]
-        embed = make_embed(
-            title=f"{'📈' if ta.above_ma200 else '📉'} [{r['symbol']}] {fmt_price(ta.current_price)} {fmt_pct(ta.pct_change)}",
-            description="",
-            color=color_for_signal(ta),
-            fields=fields,
-            footer=f"{r['market'].upper()} | Market Monitor",
+        # 回覆用戶，任務已分發
+        status_embed = make_embed(
+            title=f"📋 任務已分發：分析 {symbol}",
+            description="正在等待團隊回覆...\n\n成員：",
+            color=0xFFD700,
+            footer=f"任務ID：{task_id}",
+            fields=[{"name": ag["name"], "value": "等待中...", "inline": True} for ag in TEAM_AGENTS.values()],
         )
-        await msg.reply(embed=embed)
+        status_msg = await message.channel.send(embed=status_embed)
 
-    await interaction.followup.send(f"✅ 已更新 **{len(results)}** 檔狀態")
+        # 發任務到團隊頻道
+        team_ch = client.get_channel(team_channel_id)
+        if team_ch:
+            await team_ch.send(embed=make_task_embed(symbol, task_id))
 
+            # 初始化任務狀態
+            pending_tasks[task_id] = {
+                "symbol": symbol,
+                "user_channel": message.channel,
+                "status_msg": status_msg,
+                "reports": [],
+            }
 
-@tree.command(name="查詢", description="查詢單一標的的詳細技術分析")
-@app_commands.describe(symbol="股票或加密貨幣代碼，例如：NVDA、BTC-USD")
-async def cmd_query(interaction: discord.Interaction, symbol: str):
-    await interaction.response.defer()
-    sym = symbol.strip().upper()
+            # 5 分鐘後蒐集結果
+            await asyncio.sleep(300)
+            if task_id in pending_tasks:
+                task = pending_tasks.pop(task_id)
+                await summarize_and_reply(task, client)
 
-    df = fetch_ohlcv(sym, period="6mo", interval="1d")
-    if df.empty:
-        await interaction.followup.send(f"⚠️ 無法取得 `{sym}` 的數據，請確認代碼正確")
-        return
+    async def summarize_and_reply(task, client):
+        """蒐集報告並回覆用戶"""
+        reports = task["reports"]
+        symbol = task["symbol"]
+        user_channel = task["user_channel"]
 
-    ta = compute_ta(sym, df)
-    if ta is None:
-        await interaction.followup.send(f"⚠️ `{sym}` 數據不足，無法分析")
-        return
+        embed = make_embed(
+            title=f"🎯 {symbol} 綜合分析報告",
+            description=f"由 **{len(reports)}** 位團隊成員分析",
+            color=0xFFD700,
+            footer="Market Monitor Agent Team",
+        )
 
-    # 價格 + 漲跌
-    price_desc = f"💰 **{fmt_price(ta.current_price)}**  ({fmt_pct(ta.pct_change)})"
+        for agent_name, report in reports:
+            embed.add_field(name=f"👤 {agent_name}", value=report[:1024], inline=False)
 
-    # RSI 描述
-    rsi_desc = ""
-    if ta.rsi14 is not None:
-        if ta.rsi14 > 70:   rsi_desc = "🔥 RSI 超買區域（>70）"
-        elif ta.rsi14 < 30: rsi_desc = "🛋️ RSI 超賣區域（<30）"
-        else:               rsi_desc = f"RSI 中性區域（{ta.rsi14:.1f}）"
+        # 簡單結論
+        bullish = sum(1 for _, r in reports if any(k in r.lower() for k in ["多頭", "買入", "看多", "buy", "bull"]))
+        bearish = sum(1 for _, r in reports if any(k in r.lower() for k in ["空頭", "賣出", "看空", "sell", "bear"]))
 
-    # MA200 描述
-    ma_desc = ""
-    if ta.sma200 is not None:
-        if ta.current_price > ta.sma200:  ma_desc = f"✅ 價格 ${ta.current_price:.2f} > MA200 ${ta.sma200:.2f}（多頭）"
-        else:                              ma_desc = f"⚠️ 價格 ${ta.current_price:.2f} < MA200 ${ta.sma200:.2f}（空頭）"
-
-    embed = make_embed(
-        title=f"📊 [{sym}] 技術分析報告",
-        description=price_desc,
-        color=color_for_signal(ta),
-        fields=[
-            {"name": "📊 RSI(14)",     "value": f"`{ta.rsi14:.1f}` — {rsi_desc}", "inline": False},
-            {"name": "📈 MA200 狀態",   "value": ma_desc,                           "inline": False},
-            {"name": "MACD",            "value": f"`{ta.macd:.4f}`  信號線：`{ta.macd_signal:.4f}`", "inline": False},
-            {"name": "📐 布林帶",       "value": f"下軌 `${ta.bb_lower:.2f}` 中軌 `${ta.bb_middle:.2f}` 上軌 `${ta.bb_upper:.2f}`", "inline": False},
-            {"name": "SMA 均線",        "value": f"SMA20=`${ta.sma20:.2f}` SMA50=`${ta.sma50:.2f}` SMA200=`${ta.sma200:.2f}`", "inline": False},
-        ],
-        footer=f"Market Monitor | {sym}",
-    )
-    await interaction.followup.send(embed=embed)
-
-
-@tree.command(name="摘要", description="立即發送市場摘要報告")
-async def cmd_summary(interaction: discord.Interaction):
-    await interaction.response.defer()
-
-    from concurrent.futures import ThreadPoolExecutor
-
-    def fetch_one(cfg: SymbolConfig):
-        df = fetch_ohlcv(cfg.symbol, period="6mo", interval="1d")
-        if df.empty: return None
-        ta = compute_ta(cfg.symbol, df)
-        return {"symbol": cfg.symbol, "ta": ta} if ta else None
-
-    with ThreadPoolExecutor(max_workers=6) as ex:
-        results = [f.result() for f in [ex.submit(fetch_one, cfg) for cfg in symbols_cfg] if f.result()]
-
-    if not results:
-        await interaction.followup.send("⚠️ 無法取得數據")
-        return
-
-    bullish, overbought, bearish, neutral = [], [], [], []
-    for r in results:
-        sym = r["symbol"]
-        ta = r["ta"]
-        if ta.above_ma200 and ta.current_price > (ta.sma50 or float("inf")):
-            bullish.append(r)
-        elif ta.rsi14 and ta.rsi14 > 70:
-            overbought.append(r)
-        elif ta.below_ma200 and ta.current_price < (ta.sma50 or 0):
-            bearish.append(r)
+        if bullish > bearish:
+            conclusion = f"🟢 **結論：偏多**（{bullish} vs {bearish}）"
+        elif bearish > bullish:
+            conclusion = f"🔴 **結論：偏空**（{bullish} vs {bearish}）"
         else:
-            neutral.append(r)
+            conclusion = f"⚪ **結論：中性**"
 
-    now = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
-    embed = make_embed(
-        title=f"📋 市場摘要 · {now[11:]}",
-        description=f"共監控 **{len(results)}** 檔資產 | 每4小時更新",
-        color=0x7289DA,
-        fields=[],
-        footer="Market Monitor 每4小時摘要",
-    )
+        embed.description += f"\n\n{conclusion}"
 
-    if bullish:
-        lines = []
-        for r in bullish:
-            ta = r["ta"]
-            detail = _ta_detail_line(ta)
-            conclusion = _signal_conclusion(ta)
-            lines.append(f"**{r['symbol']}** {fmt_price(ta.current_price)} {fmt_pct(ta.pct_change)}\n{detail}\n→ {conclusion}")
-        embed.add_field(name="🟢 多頭訊號", value="\n\n".join(lines)[:1024], inline=False)
+        await task["status_msg"].edit(embed=embed)
 
-    if overbought:
-        lines = []
-        for r in overbought:
-            ta = r["ta"]
-            detail = _ta_detail_line(ta)
-            conclusion = _signal_conclusion(ta)
-            lines.append(f"**{r['symbol']}** {fmt_price(ta.current_price)} {fmt_pct(ta.pct_change)}\n{detail}\n→ {conclusion}")
-        embed.add_field(name="🔥 超買警告", value="\n\n".join(lines)[:1024], inline=False)
+    # 斜線命令
+    @tree.command(name="幫助", description="顯示使用說明")
+    async def cmd_help(interaction: discord.Interaction):
+        embed = make_embed(
+            title="📖 Agent Team 使用說明",
+            description="向對沖基金老闆一样，發送分析需求",
+            fields=[
+                {"name": "📋 發起分析", "value": "`/分析 NVDA` 或 DM `分析 TSLA`", "inline": False},
+                {"name": "👥 團隊成員", "value": "交易員、行業研究員、宏觀策略師、情報官、風控官、量化策略師", "inline": False},
+            ],
+        )
+        await interaction.response.send_message(embed=embed, ephemeral=False)
 
-    if bearish:
-        lines = []
-        for r in bearish:
-            ta = r["ta"]
-            detail = _ta_detail_line(ta)
-            conclusion = _signal_conclusion(ta)
-            lines.append(f"**{r['symbol']}** {fmt_price(ta.current_price)} {fmt_pct(ta.pct_change)}\n{detail}\n→ {conclusion}")
-        embed.add_field(name="🔴 空頭訊號", value="\n\n".join(lines)[:1024], inline=False)
+    @tree.command(name="團隊", description="查看團隊成員")
+    async def cmd_team(interaction: discord.Interaction):
+        fields = [{"name": f"{ag['emoji']} {ag['name']}", "value": ag["focus"], "inline": False} for ag in TEAM_AGENTS.values()]
+        embed = make_embed(title="🤖 Agent Team 成員", description="共 6 位專業分析師", color=0x00C851, fields=fields)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
 
-    if neutral:
-        lines = []
-        for r in neutral:
-            ta = r["ta"]
-            detail = _ta_detail_line(ta)
-            conclusion = _signal_conclusion(ta)
-            lines.append(f"**{r['symbol']}** {fmt_price(ta.current_price)} {fmt_pct(ta.pct_change)}\n{detail}\n→ {conclusion}")
-        embed.add_field(name="⚪ 中性觀望", value="\n\n".join(lines)[:1024], inline=False)
-
-    await interaction.followup.send(embed=embed)
-
-
-# ══════════════════════════════════════════════════════
-# 主程式（讀取環境變數啟動）
-# ══════════════════════════════════════════════════════
-
-def main():
-    global alert_mgr, symbols_cfg, monitor_interval, _channel_id
-
-    import asyncio
-
-    # 讀取設定
-    raw_cfg = load_config()
-    monitor_cfg, symbols_cfg = parse_config(raw_cfg)
-    monitor_interval = monitor_cfg.interval_minutes
-    alert_mgr = AlertManager()
-
-    # 讀取環境變數
-    bot_token = os.environ.get("DISCORD_BOT_TOKEN")
-    if not bot_token:
-        log.error("❌ 缺少 DISCORD_BOT_TOKEN，請在 Railway 設定環境變數")
-        sys.exit(1)
-
-    channel_id_str = os.environ.get("DISCORD_CHANNEL_ID", "").strip()
-    if channel_id_str:
-        try:
-            _channel_id = int(channel_id_str)
-        except ValueError:
-            log.warning(f"無效的 DISCORD_CHANNEL_ID：{channel_id_str}，將不使用固定頻道")
-    else:
-        log.warning("未設定 DISCORD_CHANNEL_ID，背景監控將在 Bot 加入的任何頻道內執行")
-
-    log.info(f"監控 {len(symbols_cfg)} 檔資產，間隔 {monitor_interval} 分鐘")
-    log.info("=" * 50)
-
-    # 啟動 Bot
+    log.info("🚀 啟動 Leader Bot")
     client.run(bot_token, log_handler=None)
 
 
-# ═══════════════════════════════════════════════════════════════════
-# 期權命令（需 POLYGON_API_KEY）
-# ═══════════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════
+# Team Agent Bot（監聽團隊頻道，分析並回傳）
+# ══════════════════════════════════════════════════════
 
-@app_commands.describe(symbol="股票代碼，例如：AAPL、TSLA")
-@tree.command(name="期权到期", description="查看指定股票的期權到期日")
-async def cmd_option_expiry(interaction: discord.Interaction, symbol: str):
-    await interaction.response.defer()
-    sym = symbol.strip().upper()
-    try:
-        from src.options_fetcher import get_option_expirations
-        expirations = get_option_expirations(sym)
-    except ValueError as e:
-        await interaction.followup.send(f"⚠️ {e}")
-        return
-    except Exception as e:
-        await interaction.followup.send(f"⚠️ 取得期權到期日失敗：{e}")
-        return
-    if not expirations:
-        await interaction.followup.send(f"⚠️ 找不到 {sym} 的期權數據")
-        return
-    recent = expirations[:6]
-    lines = [f"**📅 {sym} 期權到期日**\n"]
-    for exp in recent:
-        days = exp["days_to_expiry"]
-        label = "（本週）" if days <= 7 else ("（下週）" if days <= 14 else "")
-        lines.append(f"  `{exp['date']}`  還有 {days} 天 {label}")
-    if len(expirations) > 6:
-        lines.append(f"\n_還有 {len(expirations) - 6} 個更多到期日_")
-    lines.append("\n使用 `/期权链 <代碼> <到期日>` 查看詳細 chain")
-    await interaction.followup.send("\n".join(lines))
+def run_team_agent_bot(bot_token: str, agent_key: str, team_channel_id: int):
+    """運行 Team Agent Bot"""
+    intents = discord.Intents.default()
+    intents.message_content = True
+    intents.guild_messages = True
+
+    client = discord.Client(intents=intents)
+    tree = app_commands.CommandTree(client)
+
+    agent = TEAM_AGENTS[agent_key]
+
+    def parse_task_message(content: str):
+        """解析任務格式"""
+        match = re.search(r"📋.*分析\s+([A-Z]{2,5}(?:-USD)?).*任務ID：`(\S+)`", content)
+        if match:
+            return match.group(1), match.group(2)
+        return None, None
+
+    @client.event
+    async def on_ready():
+        log.info(f"✅ {agent['name']} Bot 上線：{client.user}")
+        await tree.sync()
+
+        team_ch = client.get_channel(team_channel_id)
+        if team_ch:
+            embed = make_embed(
+                title=f"✅ {agent['name']} 已上線",
+                description=f"職責：{agent['focus']}",
+                color=0x00C851,
+            )
+            await team_ch.send(embed=embed)
+
+    @client.event
+    async def on_message(message: discord.Message):
+        if message.author.id == client.user.id:
+            return
+        if message.channel.id != team_channel_id:
+            return
+
+        symbol, task_id = parse_task_message(message.content)
+        if not symbol or not task_id:
+            return
+
+        log.info(f"📋 {agent['name']} 收到任務：{symbol}")
+
+        # 獲取技術數據
+        ta_data = get_ta_summary(symbol)
+        if not ta_data:
+            await message.channel.send(f"[{agent['name']}] {task_id} ⚠️ 無法取得 {symbol} 數據")
+            return
+
+        # 調用 AI 分析
+        user_msg = f"""請分析 {symbol} 的投資價值。
+
+參考數據：
+{ta_data}
+
+請根據你的專業領域，給出簡潔的分析意見。"""
+
+        async with message.channel.typing():
+            report = await call_minimax(agent["system_prompt"], user_msg)
+
+        # 回傳報告
+        report_msg = f"[{agent['name']}] {task_id} {report}"
+        await message.channel.send(report_msg)
+        log.info(f"✅ {agent['name']} 已回傳報告")
+        await message.add_reaction("✅")
+
+    # 斜線命令
+    @tree.command(name="幫助", description=f"顯示 {agent['name']} 說明")
+    async def cmd_help(interaction: discord.Interaction):
+        embed = make_embed(
+            title=f"🤖 {agent['name']}",
+            description=f"職責：{agent['focus']}",
+            color=0x7289DA,
+        )
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    @tree.command(name="測試", description="測試分析功能")
+    @app_commands.describe(symbol="股票代碼")
+    async def cmd_test(interaction: discord.Interaction, symbol: str):
+        await interaction.response.defer()
+        ta_data = get_ta_summary(symbol.upper())
+        if not ta_data:
+            await interaction.followup.send(f"⚠️ 無法取得 {symbol} 數據")
+            return
+
+        user_msg = f"請分析 {symbol}。\n\n參考數據：\n{ta_data}"
+        report = await call_minimax(agent["system_prompt"], user_msg)
+
+        embed = make_embed(
+            title=f"📊 [{symbol}] {agent['name']} 分析",
+            description=report,
+            color=0x00C851,
+        )
+        await interaction.followup.send(embed=embed)
+
+    log.info(f"🚀 啟動 {agent['name']} Bot")
+    client.run(bot_token, log_handler=None)
 
 
-@app_commands.describe(symbol="股票代碼", expiration="到期日 (YYYY-MM-DD)")
-@tree.command(name="期权链", description="查看指定到期日的完整期權鏈")
-async def cmd_option_chain(interaction: discord.Interaction, symbol: str, expiration: str):
-    await interaction.response.defer()
-    sym = symbol.strip().upper()
-    try:
-        from src.options_fetcher import get_option_chain
-        chain = get_option_chain(sym, expiration)
-    except ValueError as e:
-        await interaction.followup.send(f"⚠️ {e}")
-        return
-    except Exception as e:
-        await interaction.followup.send(f"⚠️ 取得期權鏈失敗：{e}")
-        return
-    underlying = chain.get("underlying_price", 0)
-    calls, puts = chain.get("calls", []), chain.get("puts", [])
-    if not calls and not puts:
-        await interaction.followup.send(f"⚠️ 找不到 {sym} {expiration} 的期權數據")
-        return
+# ══════════════════════════════════════════════════════
+# 主程式（協調所有 Bot）
+# ══════════════════════════════════════════════════════
 
-    atm_call = min(calls, key=lambda x: abs(x["strike"] - underlying)) if underlying and calls else None
-    atm_put = min(puts, key=lambda x: abs(x["strike"] - underlying)) if underlying and puts else None
-    fields = [
-        {"name": "標的現價", "value": f"**${underlying:.2f}**", "inline": True},
-        {"name": "到期日", "value": f"`{expiration}`", "inline": True},
-        {"name": "合約數量", "value": f"Calls: {len(calls)} | Puts: {len(puts)}", "inline": False},
-    ]
-    if atm_call:
-        fields.append({"name": "📈 ATM Call", "value": f"行權 `${atm_call['strike']:.2f}` 報價 `${atm_call['last']:.2f}` IV `{atm_call['iv']:.1f}%` OI `{atm_call['oi']:,}` Δ `{atm_call['delta']:.3f}`", "inline": False})
-    if atm_put:
-        fields.append({"name": "📉 ATM Put", "value": f"行權 `${atm_put['strike']:.2f}` 報價 `${atm_put['last']:.2f}` IV `{atm_put['iv']:.1f}%` OI `{atm_put['oi']:,}` Δ `{atm_put['delta']:.3f}`", "inline": False})
-    fields.append({"name": "📊 ITM/OTM", "value": f"C ITM:{sum(1 for c in calls if c['itm']=='ITM')} C OTM:{sum(1 for c in calls if c['itm']=='OTM')} P ITM:{sum(1 for p in puts if p['itm']=='ITM')} P OTM:{sum(1 for p in puts if p['itm']=='OTM')}", "inline": False})
-    embed = make_embed(title=f"⛓️ [{sym}] 期權鏈 — {expiration}", description=f"標的現價：**${underlying:.2f}**", color=0x00C851, fields=fields, footer=f"Market Monitor | 免費版 Polygon.io")
-    await interaction.followup.send(embed=embed)
+def main():
+    """讀取配置，啟動所有 Bot"""
+    from src.config import load_config, load_agents_config
 
+    raw_cfg = load_config()
+    agents_cfg = load_agents_config(raw_cfg)
 
-@app_commands.describe(symbol="股票代碼", expiration="到期日 (YYYY-MM-DD)")
-@tree.command(name="期权墙", description="查看期權牆（OI Wall）— 哪個行權價堆積最多未平倉量")
-async def cmd_option_wall(interaction: discord.Interaction, symbol: str, expiration: str):
-    await interaction.response.defer()
-    sym = symbol.strip().upper()
-    try:
-        from src.options_fetcher import build_options_wall
-        wall = build_options_wall(sym, expiration)
-    except ValueError as e:
-        await interaction.followup.send(f"⚠️ {e}")
-        return
-    except Exception as e:
-        await interaction.followup.send(f"⚠️ 取得期權牆失敗：{e}")
-        return
-    underlying = wall.get("underlying_price", 0)
-    oi_wall = wall.get("oi_wall")
-    calls, puts = wall.get("calls", []), wall.get("puts", [])
-    total_calls_oi = wall.get("total_calls_oi", 0)
-    total_puts_oi = wall.get("total_puts_oi", 0)
-    if not calls and not puts:
-        await interaction.followup.send(f"⚠️ 找不到 {sym} {expiration} 的 OI 數據")
-        return
+    # 讀取必要的環境變數
+    leader_token = os.environ.get("LEADER_BOT_TOKEN")
+    team_channel_id = int(os.environ.get("TEAM_CHANNEL_ID", 0))
 
-    wall_desc = ""
-    if oi_wall:
-        emoji = "📈" if oi_wall["type"] == "call" else "📉"
-        wall_desc = f"{emoji} **OI 牆：${oi_wall['strike']:.2f}** ({oi_wall['type'].upper()}) — OI: {oi_wall['oi']:,} 合約\n"
+    if not leader_token:
+        log.error("❌ 缺少 LEADER_BOT_TOKEN")
+        sys.exit(1)
 
-    top_puts = sorted(puts, key=lambda x: x["oi"], reverse=True)[:5]
-    top_calls = sorted(calls, key=lambda x: x["oi"], reverse=True)[:5]
-    ratio = total_calls_oi / max(total_puts_oi, 1)
-    fields = [
-        {"name": "📉 Put OI 排行", "value": "\n".join([f"`${p['strike']:.2f}` {p['itm'][0]}  {p['oi']:>8,}OI" for p in top_puts]) or "無數據", "inline": True},
-        {"name": "📈 Call OI 排行", "value": "\n".join([f"`${c['strike']:.2f}` {c['itm'][0]}  {c['oi']:>8,}OI" for c in top_calls]) or "無數據", "inline": True},
-        {"name": "📊 總OI 比率", "value": f"C: **{total_calls_oi:,}**  |  P: **{total_puts_oi:,}**  |  C/P = **{ratio:.2f}**", "inline": False},
-    ]
-    embed = make_embed(title=f"🧱 [{sym}] 期權牆 — {expiration}", description=f"{wall_desc}📍 現價：**${underlying:.2f}**" if underlying else f"{wall_desc}到期日：`{expiration}`", color=0xFF8C00, fields=fields, footer=f"Market Monitor | OI=未平倉量")
-    await interaction.followup.send(embed=embed)
+    if not team_channel_id:
+        log.error("❌ 缺少 TEAM_CHANNEL_ID")
+        sys.exit(1)
+
+    # 啟動 Leader Bot（主執行緒）
+    leader_thread = threading.Thread(
+        target=run_leader_bot,
+        args=(leader_token, team_channel_id),
+        name="LeaderBot",
+        daemon=True,
+    )
+    leader_thread.start()
+    log.info("📦 Leader Bot 已啟動")
+
+    # 啟動各 Team Agent Bot（子執行緒）
+    agent_threads = []
+    for agent_key, cfg in agents_cfg.items():
+        if agent_key == "chief_strategist":
+            continue  # Leader 用單獨的 token
+
+        token_env = cfg.token_env or f"{agent_key.upper()}_TOKEN"
+        token = os.environ.get(token_env)
+        if not token:
+            log.warning(f"⚠️ 跳過 {agent_key}：缺少 {token_env}")
+            continue
+
+        t = threading.Thread(
+            target=run_team_agent_bot,
+            args=(token, agent_key, team_channel_id),
+            name=f"{agent_key}Bot",
+            daemon=True,
+        )
+        t.start()
+        agent_threads.append(t)
+        log.info(f"📦 {agent_key} Bot 已啟動")
+
+    log.info(f"🚀 全部啟動完成，共 {len(agent_threads) + 1} 個 Bot")
+
+    # 等待所有執行緒
+    leader_thread.join()
 
 
 if __name__ == "__main__":

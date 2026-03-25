@@ -1,8 +1,11 @@
 yfinance>=0.2.40
 pandas>=2.0.0
+pandas-ta>=0.8.18
 requests>=2.28.0
 PyYAML>=6.0
 APScheduler>=3.10.4
 python-dateutil>=2.8.2
 discord.py>=2.4.0
 polygon-api-client>=1.13.0
+anthropic>=0.25.0
+aiohttp>=3.9.0

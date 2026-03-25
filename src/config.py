@@ -4,10 +4,11 @@
 import os
 import yaml
 from dataclasses import dataclass, field
-from typing import List
+from typing import List, Optional
 from .logger import setup_logger
 
 log = setup_logger("config")
+
 
 @dataclass
 class AlertRule:
@@ -15,16 +16,27 @@ class AlertRule:
     threshold: float = 0
     cooldown_hours: float = 6
 
+
 @dataclass
 class SymbolConfig:
     symbol: str
     market: str        # "stock" or "crypto"
     alerts: List[AlertRule] = field(default_factory=list)
 
+
 @dataclass
 class MonitorConfig:
     interval_minutes: int = 15
     summary_interval: int = 60
+
+
+@dataclass
+class AgentSettings:
+    """單一 Agent 配置"""
+    enabled: bool = True
+    token_env: str = ""          # 環境變數名（用於讀取 Discord Token）
+    watch_symbols: list = field(default_factory=list)  # 該 Agent 關注的標的
+
 
 def load_config(config_path: str = "config.yaml") -> dict:
     path = os.environ.get("CONFIG_PATH", config_path)
@@ -35,6 +47,7 @@ def load_config(config_path: str = "config.yaml") -> dict:
         raw = yaml.safe_load(f) or {}
     log.info(f"設定檔載入：{path}")
     return raw
+
 
 def parse_config(raw: dict) -> tuple:
     """解析設定檔，返回 (monitor_cfg, symbols)"""
@@ -59,3 +72,21 @@ def parse_config(raw: dict) -> tuple:
         symbols.append(SymbolConfig(symbol=item["symbol"], market="crypto", alerts=alerts))
 
     return monitor_cfg, symbols
+
+
+def load_agents_config(raw: dict) -> dict[str, AgentSettings]:
+    """從設定檔解析多 Agent 配置（向後相容）"""
+    agents_raw = raw.get("agents", {})
+    agents = {}
+
+    for name, cfg in agents_raw.items():
+        if isinstance(cfg, dict):
+            agents[name] = AgentSettings(
+                enabled=cfg.get("enabled", True),
+                token_env=cfg.get("token_env", f"{name.upper()}_TOKEN"),
+                watch_symbols=cfg.get("watch_symbols", []),
+            )
+        else:
+            agents[name] = AgentSettings(enabled=bool(cfg))
+
+    return agents
