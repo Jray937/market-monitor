@@ -24,7 +24,6 @@ import json
 import discord
 from discord import app_commands
 from typing import Optional
-import aiohttp
 
 # ── 本地模組 ──
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -156,45 +155,28 @@ async def call_minimax(
     user_message: str,
     max_tokens: int = 1024,
 ) -> str:
-    """調用 MiniMax API（原生 HTTP 調用）"""
+    """調用 MiniMax API（Anthropic SDK 相容）"""
+    import anthropic
 
     api_key = os.environ.get("MINIMAX_API_KEY")
     if not api_key:
         return "⚠️ 未設定 MINIMAX_API_KEY"
 
-    base_url = os.environ.get(
-        "MINIMAX_API_BASE_URL",
-        "https://api.minimaxi.com/v1/chat/completions",
-    )
+    base_url = os.environ.get("MINIMAX_API_BASE_URL", "https://api.minimaxi.com/v1")
     model = os.environ.get("MINIMAX_MODEL", "MiniMax-M2.7")
 
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-    }
-    payload = {
-        "model": model,
-        "max_tokens": max_tokens,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_message},
-        ],
-    }
-
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                base_url, headers=headers, json=payload
-            ) as resp:
-                if resp.status != 200:
-                    error_text = await resp.text()
-                    log.error(f"❌ MiniMax API HTTP {resp.status}：{error_text}")
-                    return "⚠️ 分析失敗"
-                data = await resp.json()
-                choices = data.get("choices", [])
-                if choices:
-                    return choices[0].get("message", {}).get("content", "⚠️ 無回應")
-                return "⚠️ 無回應"
+        client = anthropic.Anthropic(
+            api_key=api_key,
+            base_url=base_url,
+        )
+        response = client.messages.create(
+            model=model,
+            max_tokens=max_tokens,
+            system=system_prompt,
+            messages=[{"role": "user", "content": user_message}],
+        )
+        return response.content[0].text if response.content else "⚠️ 無回應"
     except Exception as e:
         log.error(f"❌ MiniMax API 錯誤：{e}")
         return "⚠️ 分析失敗"

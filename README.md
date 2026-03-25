@@ -63,7 +63,7 @@ python bot.py
 | `LEADER_BOT_TOKEN` | Leader Bot 的 Discord Token | ✅ |
 | `TEAM_CHANNEL_ID` | 團隊協調用的 Discord 頻道 ID | ✅ |
 | `MINIMAX_API_KEY` | MiniMax API Key | ✅ |
-| `MINIMAX_API_BASE_URL` | `https://api.minimaxi.com/v1/chat/completions` | ✅ |
+| `MINIMAX_API_BASE_URL` | `https://api.minimaxi.com/v1` | ✅ |
 | `MINIMAX_MODEL` | `MiniMax-M2.7` | ✅ |
 | `CONFIG_PATH` | `config.yaml` 位置，預設 `/app/config.yaml` | |
 | `HTTPS_PROXY` / `HTTP_PROXY` | 代理（如需要） | |
