@@ -7,7 +7,8 @@ Discord Bot — 多 Bot 協調架構
   - 各 Agent Bot 監聽團隊頻道，分析並回傳
   - Leader Bot 彙總回覆給用戶
 
-使用 discord.py + MiniMax API
+狀態流程：
+  發送中 → 已接收（或 接收超時）→ 處理中 → 匯總中 → 完成
 """
 import os
 import sys
@@ -29,9 +30,9 @@ from src.analyzer import compute_ta
 from src.logger import setup_logger
 log = setup_logger("discord_bot")
 
-# ══════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════
 # Agent 定義
-# ══════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════
 
 TEAM_AGENTS = {
     "trader": {
@@ -107,10 +108,37 @@ TEAM_AGENTS = {
     },
 }
 
+# Agent key → display name mapping for report parsing
+AGENT_NAME_TO_KEY = {ag["name"]: key for key, ag in TEAM_AGENTS.items()}
 
-# ══════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════
+# 狀態定義
+# ══════════════════════════════════════════════════════════════
+
+STATE_PENDING   = "⏳ 等待中"
+STATE_SENT      = "📤 發送中"
+STATE_RECEIVED  = "✅ 已接收"
+STATE_TIMEOUT   = "❌ 接收超時"
+STATE_PROCESSING= "🔄 處理中"
+STATE_SUMMARIZING = "📝 匯總中"
+STATE_DONE      = "✅ 完成"
+STATE_ERROR     = "⚠️ 錯誤"
+
+AGENT_STATES = [
+    STATE_PENDING,
+    STATE_SENT,
+    STATE_RECEIVED,
+    STATE_TIMEOUT,
+    STATE_PROCESSING,
+    STATE_SUMMARIZING,
+    STATE_DONE,
+    STATE_ERROR,
+]
+
+
+# ══════════════════════════════════════════════════════════════
 # 工具函式
-# ══════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════
 
 def make_embed(title, description="", color=0x7289DA, fields=None, footer=None):
     embed = discord.Embed(title=title, description=description, color=color)
@@ -128,9 +156,9 @@ def fmt_pct(pct: float) -> str:
     return f"{'📈' if pct >= 0 else '📉'} {pct:+.2f}%"
 
 
-# ══════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════
 # AI 調用
-# ══════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════
 
 async def call_minimax(system_prompt: str, user_message: str) -> str:
     """調用 MiniMax API"""
@@ -201,9 +229,9 @@ def get_ta_summary(symbol: str) -> Optional[str]:
         return None
 
 
-# ══════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════
 # Leader Bot（接收需求，分發任務，蒐集回覆）
-# ══════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════
 
 def run_leader_bot(bot_token: str, team_channel_id: int, user_channel_id: int = None):
     """運行 Leader Bot"""
@@ -215,16 +243,49 @@ def run_leader_bot(bot_token: str, team_channel_id: int, user_channel_id: int = 
     client = discord.Client(intents=intents)
     tree = app_commands.CommandTree(client)
 
-    # 待完成的任務
-    pending_tasks = {}  # task_id -> {"symbol": str, "user_channel":, "reports": []}
+    # task_id -> TaskState
+    pending_tasks: dict = {}
 
-    def make_task_embed(symbol: str, task_id: str):
-        agent_list = "\n".join([f"{ag['emoji']} {ag['name']}" for ag in TEAM_AGENTS.values()])
+    class TaskState:
+        """單一任務的完整狀態追蹤"""
+        def __init__(self, symbol: str, task_id: str, user_channel, status_msg):
+            self.symbol = symbol
+            self.task_id = task_id
+            self.user_channel = user_channel
+            self.status_msg = status_msg
+            # 每個 Agent 的狀態：key → state string
+            self.agent_states: dict = {key: STATE_PENDING for key in TEAM_AGENTS}
+            self.reports: list = []  # (agent_name, report_text)
+            self.created_at = time.time()
+            self.receive_timeout = 120  # 秒，接收超時
+            self.process_timeout = 180   # 秒，處理超時
+
+    def build_status_embed(task: TaskState) -> discord.Embed:
+        """根據當前任務狀態建構 Embed"""
+        fields = []
+        for key, ag in TEAM_AGENTS.items():
+            state = task.agent_states.get(key, STATE_PENDING)
+            fields.append({"name": f"{ag['emoji']} {ag['name']}", "value": state, "inline": True})
+
+        elapsed = int(time.time() - task.created_at)
+        description = (
+            f"任務 ID：`{task.task_id}`\n"
+            f"耗時：{elapsed}秒\n\n"
+            f"成員狀態：\n"
+        )
+
+        color = 0xFFD700  # 處理中金色
+        if all(s in (STATE_DONE,) for s in task.agent_states.values()):
+            color = 0x00C851
+        elif any(s == STATE_ERROR for s in task.agent_states.values()):
+            color = 0xFF4444
+
         return make_embed(
-            title=f"📋 團隊任務：分析 {symbol}",
-            description=f"請各 Agent 分析並回傳報告到本頻道\n\n參與成員：\n{agent_list}",
-            color=0xFFD700,
-            footer=f"任務ID：{task_id}",
+            title=f"📋 分析任務：{task.symbol}",
+            description=description,
+            color=color,
+            footer=f"任務ID：{task.task_id}",
+            fields=fields,
         )
 
     def parse_agent_report(content: str):
@@ -234,13 +295,20 @@ def run_leader_bot(bot_token: str, team_channel_id: int, user_channel_id: int = 
             return match.group(1).strip(), match.group(2).strip(), match.group(3).strip()
         return None, None, None
 
+    async def update_user_status(task: TaskState):
+        """更新用戶側的狀態消息"""
+        try:
+            embed = build_status_embed(task)
+            await task.status_msg.edit(embed=embed)
+        except Exception as e:
+            log.error(f"❌ 更新狀態失敗：{e}")
+
     @client.event
     async def on_ready():
         log.info(f"✅ Leader Bot 上線：{client.user}")
         await tree.sync()
         log.info("✅ 斜線命令已同步")
 
-        # 在團隊頻道發送上線消息
         team_ch = client.get_channel(team_channel_id)
         if team_ch:
             embed = make_embed(
@@ -252,17 +320,41 @@ def run_leader_bot(bot_token: str, team_channel_id: int, user_channel_id: int = 
 
     @client.event
     async def on_message(message: discord.Message):
+        # ── 團隊頻道：接收 Agent 報告 ──
+        if message.channel.id == team_channel_id:
+            agent_name, task_id, report_text = parse_agent_report(message.content)
+            if agent_name and task_id and task_id in pending_tasks:
+                task = pending_tasks[task_id]
+                # 找到對應的 agent key
+                agent_key = AGENT_NAME_TO_KEY.get(agent_name)
+                if agent_key and agent_key in task.agent_states:
+                    # 更新為處理中
+                    task.agent_states[agent_key] = STATE_PROCESSING
+                    await update_user_status(task)
+
+                    # 添加報告
+                    task.reports.append((agent_name, report_text))
+                    # 更新為已回傳
+                    task.agent_states[agent_key] = STATE_SUMMARIZING
+                    await update_user_status(task)
+                    log.info(f"📥 Leader 收到 {agent_name} 報告（{task_id}）")
+
+                    # 批次更新為完成
+                    await asyncio.sleep(1)
+                    task.agent_states[agent_key] = STATE_DONE
+                    await update_user_status(task)
+            return
+
+        # ── 用戶頻道（DM/mention）：接收分析請求 ──
         if message.author.id == client.user.id:
             return
 
         is_dm = isinstance(message.channel, discord.DMChannel)
         is_mentioned = client.user in message.mentions
 
-        # 只處理 DM 或 @mention
         if not (is_dm or is_mentioned):
             return
 
-        # 解析標的
         content = message.content.strip()
         if is_mentioned:
             content = re.sub(r"<@\d+>\s*", "", content)
@@ -275,50 +367,105 @@ def run_leader_bot(bot_token: str, team_channel_id: int, user_channel_id: int = 
         symbol = symbols[0]
         task_id = f"task_{int(time.time() * 1000)}"
 
-        # 回覆用戶，任務已分發
+        # 發送初始狀態
         status_embed = make_embed(
             title=f"📋 任務已分發：分析 {symbol}",
             description="正在等待團隊回覆...\n\n成員：",
             color=0xFFD700,
             footer=f"任務ID：{task_id}",
-            fields=[{"name": ag["name"], "value": "等待中...", "inline": True} for ag in TEAM_AGENTS.values()],
+            fields=[{"name": ag["name"], "value": STATE_SENT, "inline": True} for ag in TEAM_AGENTS.values()],
         )
         status_msg = await message.channel.send(embed=status_embed)
 
-        # 發任務到團隊頻道
         team_ch = client.get_channel(team_channel_id)
-        if team_ch:
-            await team_ch.send(embed=make_task_embed(symbol, task_id))
+        if not team_ch:
+            await message.channel.send("⚠️ 無法訪問團隊頻道")
+            return
 
-            # 初始化任務狀態
-            pending_tasks[task_id] = {
-                "symbol": symbol,
-                "user_channel": message.channel,
-                "status_msg": status_msg,
-                "reports": [],
-            }
+        # 初始化任務
+        task = TaskState(symbol, task_id, message.channel, status_msg)
+        pending_tasks[task_id] = task
 
-            # 5 分鐘後蒐集結果
-            await asyncio.sleep(300)
-            if task_id in pending_tasks:
-                task = pending_tasks.pop(task_id)
-                await summarize_and_reply(task, client)
+        # 所有 Agent 標記為已發送
+        for key in task.agent_states:
+            task.agent_states[key] = STATE_SENT
+        await update_user_status(task)
 
-    async def summarize_and_reply(task, client):
+        # 發任務到團隊頻道
+        agent_list = "\n".join([f"{ag['emoji']} {ag['name']}" for ag in TEAM_AGENTS.values()])
+        task_embed = make_embed(
+            title=f"📋 團隊任務：分析 {symbol}",
+            description=f"請各 Agent 分析並回傳報告到本頻道\n\n參與成員：\n{agent_list}",
+            color=0xFFD700,
+            footer=f"任務ID：{task_id}",
+        )
+        await team_ch.send(embed=task_embed)
+
+        # 啟動超時監控協程
+        asyncio.create_task(monitor_task(task, client))
+
+    async def monitor_task(task, client):
+        """監控任務超時，定期更新狀態"""
+        start = time.time()
+        receive_deadline = start + task.receive_timeout
+        process_deadline = start + task.receive_timeout + task.process_timeout
+
+        while time.time() < process_deadline:
+            await asyncio.sleep(5)
+            elapsed = int(time.time() - start)
+
+            # 檢查接收超時
+            if time.time() > receive_deadline:
+                for key, state in task.agent_states.items():
+                    if state == STATE_SENT:
+                        task.agent_states[key] = STATE_TIMEOUT
+
+            # 如果所有 Agent 都已完成或超時，結束監控
+            all_done = all(
+                s in (STATE_DONE, STATE_TIMEOUT, STATE_ERROR) for s in task.agent_states.values()
+            )
+            if all_done:
+                break
+
+        # 移除待處理並彙總回覆
+        if task.task_id in pending_tasks:
+            pending_tasks.pop(task.task_id)
+            await summarize_and_reply(task)
+
+    async def summarize_and_reply(task):
         """蒐集報告並回覆用戶"""
-        reports = task["reports"]
-        symbol = task["symbol"]
-        user_channel = task["user_channel"]
+        reports = task.reports
+        symbol = task.symbol
+
+        # 最終狀態更新
+        for key in task.agent_states:
+            if task.agent_states[key] not in (STATE_DONE,):
+                if task.agent_states[key] != STATE_DONE:
+                    task.agent_states[key] = STATE_TIMEOUT
+        await update_user_status(task)
+
+        # 延遲一下確保狀態已更新
+        await asyncio.sleep(2)
+
+        # 建構最終 embed
+        fields = []
+        for key, ag in TEAM_AGENTS.items():
+            state = task.agent_states.get(key, STATE_TIMEOUT)
+            # 找到該 agent 的報告
+            report_text = next((r for n, r in reports if n == ag["name"]), "（無報告）")
+            fields.append({
+                "name": f"{ag['emoji']} {ag['name']} {state}",
+                "value": report_text[:1024] if len(report_text) > 10 else state,
+                "inline": False,
+            })
 
         embed = make_embed(
             title=f"🎯 {symbol} 綜合分析報告",
-            description=f"由 **{len(reports)}** 位團隊成員分析",
-            color=0xFFD700,
+            description=f"由 **{len(reports)}** 位團隊成員分析\n耗時：{int(time.time() - task.created_at)}秒",
+            color=0x00C851,
             footer="Market Monitor Agent Team",
+            fields=fields,
         )
-
-        for agent_name, report in reports:
-            embed.add_field(name=f"👤 {agent_name}", value=report[:1024], inline=False)
 
         # 簡單結論
         bullish = sum(1 for _, r in reports if any(k in r.lower() for k in ["多頭", "買入", "看多", "buy", "bull"]))
@@ -333,7 +480,11 @@ def run_leader_bot(bot_token: str, team_channel_id: int, user_channel_id: int = 
 
         embed.description += f"\n\n{conclusion}"
 
-        await task["status_msg"].edit(embed=embed)
+        try:
+            await task.status_msg.edit(embed=embed)
+        except Exception as e:
+            log.error(f"❌ 發送最終報告失敗：{e}")
+            await task.user_channel.send(embed=embed)
 
     # 斜線命令
     @tree.command(name="幫助", description="顯示使用說明")
@@ -342,8 +493,9 @@ def run_leader_bot(bot_token: str, team_channel_id: int, user_channel_id: int = 
             title="📖 Agent Team 使用說明",
             description="向對沖基金老闆一样，發送分析需求",
             fields=[
-                {"name": "📋 發起分析", "value": "`/分析 NVDA` 或 DM `分析 TSLA`", "inline": False},
+                {"name": "📋 發起分析", "value": "`@LeaderBot 分析 NVDA` 或 DM `分析 TSLA`", "inline": False},
                 {"name": "👥 團隊成員", "value": "交易員、行業研究員、宏觀策略師、情報官、風控官、量化策略師", "inline": False},
+                {"name": "📊 狀態說明", "value": "📤發送中 → ✅已接收 → 🔄處理中 → 📝匯總中 → ✅完成\n（超時 → ❌ 接收超時）", "inline": False},
             ],
         )
         await interaction.response.send_message(embed=embed, ephemeral=False)
@@ -358,9 +510,9 @@ def run_leader_bot(bot_token: str, team_channel_id: int, user_channel_id: int = 
     client.run(bot_token, log_handler=None)
 
 
-# ══════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════
 # Team Agent Bot（監聽團隊頻道，分析並回傳）
-# ══════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════
 
 def run_team_agent_bot(bot_token: str, agent_key: str, team_channel_id: int):
     """運行 Team Agent Bot"""
@@ -405,12 +557,18 @@ def run_team_agent_bot(bot_token: str, agent_key: str, team_channel_id: int):
         if not symbol or not task_id:
             return
 
-        log.info(f"📋 {agent['name']} 收到任務：{symbol}")
+        log.info(f"📋 {agent['name']} 收到任務：{symbol}（{task_id}）")
+
+        # 回覆收到任務（讓 Leader 知道已接收）
+        await message.channel.send(
+            f"[{agent['name']}] {task_id} ✅ 已接收任務，開始分析 {symbol}..."
+        )
 
         # 獲取技術數據
         ta_data = get_ta_summary(symbol)
         if not ta_data:
             await message.channel.send(f"[{agent['name']}] {task_id} ⚠️ 無法取得 {symbol} 數據")
+            log.error(f"❌ {agent['name']} 無法取得 {symbol} 數據")
             return
 
         # 調用 AI 分析
@@ -427,7 +585,7 @@ def run_team_agent_bot(bot_token: str, agent_key: str, team_channel_id: int):
         # 回傳報告
         report_msg = f"[{agent['name']}] {task_id} {report}"
         await message.channel.send(report_msg)
-        log.info(f"✅ {agent['name']} 已回傳報告")
+        log.info(f"✅ {agent['name']} 已回傳報告（{task_id}）")
         await message.add_reaction("✅")
 
     # 斜線命令
@@ -463,9 +621,9 @@ def run_team_agent_bot(bot_token: str, agent_key: str, team_channel_id: int):
     client.run(bot_token, log_handler=None)
 
 
-# ══════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════
 # 主程式（協調所有 Bot）
-# ══════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════
 
 def main():
     """讀取配置，啟動所有 Bot"""
@@ -474,7 +632,6 @@ def main():
     raw_cfg = load_config()
     agents_cfg = load_agents_config(raw_cfg)
 
-    # 讀取必要的環境變數
     leader_token = os.environ.get("LEADER_BOT_TOKEN")
     team_channel_id = int(os.environ.get("TEAM_CHANNEL_ID", 0))
 
@@ -486,7 +643,7 @@ def main():
         log.error("❌ 缺少 TEAM_CHANNEL_ID")
         sys.exit(1)
 
-    # 啟動 Leader Bot（主執行緒）
+    # 啟動 Leader Bot
     leader_thread = threading.Thread(
         target=run_leader_bot,
         args=(leader_token, team_channel_id),
@@ -496,7 +653,7 @@ def main():
     leader_thread.start()
     log.info("📦 Leader Bot 已啟動")
 
-    # 啟動各 Team Agent Bot（子執行緒）
+    # 啟動各 Team Agent Bot
     agent_threads = []
     for agent_key, cfg in agents_cfg.items():
         if agent_key == "chief_strategist":
@@ -520,7 +677,6 @@ def main():
 
     log.info(f"🚀 全部啟動完成，共 {len(agent_threads) + 1} 個 Bot")
 
-    # 等待所有執行緒
     leader_thread.join()
 
 
