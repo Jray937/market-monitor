@@ -162,7 +162,7 @@ async def call_minimax(
     if not api_key:
         return "⚠️ 未設定 MINIMAX_API_KEY"
 
-    base_url = os.environ.get("MINIMAX_API_BASE_URL", "https://api.minimaxi.com/v1")
+    base_url = os.environ.get("MINIMAX_API_BASE_URL", "https://api.minimaxi.com/anthropic")
     model = os.environ.get("MINIMAX_MODEL", "MiniMax-M2.7")
 
     try:

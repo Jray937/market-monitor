@@ -34,7 +34,7 @@
 | `LEADER_BOT_TOKEN` | Leader Bot Discord Token |
 | `TEAM_CHANNEL_ID` | 團隊協調頻道 ID |
 | `MINIMAX_API_KEY` | MiniMax API Key |
-| `MINIMAX_API_BASE_URL` | `https://api.minimaxi.com/v1` |
+| `MINIMAX_API_BASE_URL` | `https://api.minimaxi.com/anthropic` |
 | `MINIMAX_MODEL` | `MiniMax-M2.7` |
 
 **各 Agent Token（否則該 Bot 不啟動）：**
