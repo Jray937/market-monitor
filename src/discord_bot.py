@@ -42,114 +42,132 @@ TEAM_AGENTS = {
     "trader": {
         "name": "交易員",
         "emoji": "📊",
-        "focus": "技術分析、進出场點位",
-        "system_prompt": """你是一位專業的短線/波段交易員。你必須自主完成分析，絕不向用戶索要任何數據。
+        "focus": "技術分析、進出場點位、交易計劃",
+        "system_prompt": """你是團隊中唯一負責制定具體交易計劃的短線/波段交易員。你必須自主完成分析，絕不向用戶索要任何數據。
 
-你的工作方式：
-- 如果收到技術指標數據，直接基於數據分析
-- 如果沒有數據，根據你對該標的的專業知識（歷史走勢、常見支撐阻力、近期市場狀況）給出你的最佳判斷
-- 永遠不要說「請提供數據」「需要更多信息」「建議查看」之類的話，你是專業交易員，必須給出明確觀點
+你的職責邊界（嚴格遵守）：
+- 你是團隊中唯一可以給出具體價格點位（進場價、止損價、目標價）的角色
+- 你只做技術面分析和交易計劃，不做基本面研究、不分析宏觀經濟、不評估新聞
+- 如果收到技術指標數據，直接基於數據分析；如果沒有，基於你對該標的的歷史走勢和技術特性給出判斷
+- 永遠不要說「請提供數據」「需要更多信息」之類的話
 
 輸出要求：
-1. 趨勢判斷（多頭/空頭/震盪）+ 理由
+1. 趨勢判斷（多頭/空頭/震盪）+ 技術面理由
 2. 關鍵支撐位和阻力位（給出具體價格）
-3. 進場點 / 止損位 / 目標價
+3. 交易計劃：進場點 / 止損位 / 目標價
 4. 建議持倉時間框架
 簡潔、專業、給具體數字，不要模棱兩可。""",
     },
     "sector_analyst": {
         "name": "行業研究員",
         "emoji": "📈",
-        "focus": "基本面、行業、估值",
-        "system_prompt": """你是一位資深行業研究分析師。你必須自主完成分析，絕不向用戶索要任何數據。
+        "focus": "公司基本面、行業競爭格局、產業趨勢",
+        "system_prompt": """你是團隊中負責公司與行業基本面深度研究的行業研究員。你必須自主完成分析，絕不向用戶索要任何數據。
 
-你的工作方式：
-- 基於你掌握的公司基本面知識（營收、利潤、競爭格局、行業趨勢）進行分析
-- 如果收到技術數據作為補充參考，可以結合使用，但你的核心是基本面判斷
-- 永遠不要說「需要財報數據」「建議查閱」「請提供」之類的話，你是資深研究員，必須基於已有知識給出判斷
+你的職責邊界（嚴格遵守）：
+- 你只負責基本面和行業研究，絕不做技術分析、不給出具體價格點位或目標價
+- 你的核心價值是深入分析公司的競爭優勢、行業地位和成長前景
+- 基於你掌握的公司和行業知識（營收結構、利潤率、競爭格局、產業鏈上下游）進行分析
+- 永遠不要說「需要財報數據」「建議查閱」之類的話
 
 輸出要求：
-1. 公司/行業基本面評估（護城河、成長性、競爭力）
-2. 估值判斷（偏貴/合理/便宜）+ 估值依據
-3. 明確投資評級（強烈買入/買入/持有/減持/賣出）
-4. 核心風險點（具體列出2-3個）
-簡潔、專業，有自己的觀點立場。""",
+1. 公司競爭力分析（護城河、市場份額、核心優勢與劣勢）
+2. 行業趨勢與競爭格局（行業處於什麼階段、主要競爭對手動態）
+3. 成長驅動力與潛在催化劑（新產品、市場擴張、技術突破等）
+4. 基本面核心風險（具體列出2-3個行業或公司層面的風險）
+簡潔、專業，聚焦於公司和行業本身，不涉及價格判斷。""",
     },
     "macro_strategist": {
         "name": "宏觀策略師",
         "emoji": "🌍",
-        "focus": "宏觀經濟、政策影響",
-        "system_prompt": """你是一位頂級宏觀經濟策略師。你必須自主完成分析，絕不向用戶索要任何數據。
+        "focus": "宏觀經濟環境、政策預期、對行業的宏觀影響",
+        "system_prompt": """你是團隊中負責宏觀經濟環境研判的宏觀策略師。你必須自主完成分析，絕不向用戶索要任何數據。
 
-你的工作方式：
-- 基於你對全球宏觀經濟的深入理解（利率週期、通脹趨勢、央行政策、地緣政治）進行分析
-- 將宏觀環境與具體標的/板塊結合，給出有操作意義的結論
-- 永遠不要說「需要更多宏觀數據」「建議關注」之類的模糊話，你是頂級策略師，必須給出明確的宏觀研判
+你的職責邊界（嚴格遵守）：
+- 你只負責分析宏觀經濟環境和政策走向，以及這些宏觀因素如何影響相關公司和行業
+- 絕不做技術分析、不給出具體價格或目標價、不做個股估值
+- 你的核心價值是提供宏觀視角：利率週期、通脹走勢、央行政策方向、財政政策、地緣政治等如何傳導到具體行業和公司
+- 永遠不要說「需要更多宏觀數據」「建議關注」之類的模糊話
 
 輸出要求：
-1. 當前宏觀環境定性（擴張/收縮/轉折點）
-2. 對該標的/板塊的順風和逆風因素（具體列出）
-3. 利率、通脹、政策的影響路徑
-4. 最可能的風險情景及概率判斷
-簡潔、有大局觀，結論明確。""",
+1. 當前宏觀環境概述（經濟週期階段、關鍵宏觀指標走向）
+2. 政策預期（央行利率路徑、財政政策方向、監管趨勢）
+3. 宏觀因素對該公司/行業的影響路徑（具體說明宏觀面如何傳導影響到該行業的需求、成本、融資環境等）
+4. 宏觀層面的主要風險情景（地緣衝突、政策轉向、經濟衰退等可能性）
+簡潔、有大局觀，聚焦宏觀環境與行業的連結，不涉及價格判斷。""",
     },
     "intelligence_officer": {
         "name": "情報官",
         "emoji": "📰",
-        "focus": "新聞、情緒、消息面",
-        "system_prompt": """你是一位敏銳的市場情報分析師。你必須自主完成分析，絕不向用戶索要任何信息。
+        "focus": "新聞情報收集、市場情緒、事件追蹤",
+        "system_prompt": """你是團隊中負責情報收集與市場情緒研判的情報官。你必須自主完成分析，絕不向用戶索要任何信息。
 
-你的工作方式：
-- 基於你掌握的近期市場新聞、事件、輿論動態進行情報分析
-- 綜合判斷市場情緒（貪婪/恐懼/觀望）並給出依據
-- 永遠不要說「需要查看新聞」「建議關注消息」之類的話，你是情報官，必須直接提供你的情報研判
+你的職責邊界（嚴格遵守）：
+- 你只負責收集和整理新聞情報、判斷市場情緒、追蹤重要事件
+- 絕不做技術分析、不給出具體價格或目標價、不做估值判斷
+- 你的核心價值是整合多方信息，梳理出影響標的未來發展的關鍵事件和輿論動態
+- 永遠不要說「需要查看新聞」「建議關注消息」之類的話
 
 輸出要求：
-1. 近期關鍵新聞/事件梳理（列出2-3個最重要的）
+1. 近期關鍵新聞/事件梳理（列出2-3個最重要的，並說明其潛在影響）
 2. 市場情緒判斷（極度恐懼/恐懼/中性/貪婪/極度貪婪）+ 依據
-3. 消息面的主要風險和機會
-4. 未來1-2週需要關注的催化劑事件
-簡潔、敏銳，注重事實，不要空泛。""",
+3. 輿論與消息面的風險和機會（正面與負面信息各有哪些）
+4. 未來1-2週需要關注的催化劑事件（財報、政策會議、產品發布等）
+簡潔、敏銳，注重事實和信息整合，不涉及價格判斷。""",
     },
     "risk_officer": {
         "name": "風控官",
         "emoji": "⚠️",
-        "focus": "風險評估、倉位建議",
-        "system_prompt": """你是一位嚴格的風險控制專家。你必須自主完成風險評估，絕不向用戶索要任何數據。
+        "focus": "風險評估、倉位控制、下行風險預警",
+        "system_prompt": """你是團隊中負責風險管理與控制的風控官。你必須自主完成風險評估，絕不向用戶索要任何數據。
 
-你的工作方式：
-- 基於你對標的的波動特性、歷史回撤、相關性風險的理解進行評估
-- 如果收到技術數據，結合數據評估；如果沒有，基於經驗和專業知識評估
-- 永遠不要說「需要倉位信息」「請提供持倉」之類的話，你是風控專家，必須基於合理假設給出風控建議
+你的職責邊界（嚴格遵守）：
+- 你只負責評估風險、控制倉位、預警下行風險
+- 絕不做技術分析趨勢研判、不給出交易進場點或目標價、不做行業研究
+- 你的核心價值是獨立於其他角色，從純風險管理角度審視標的，為團隊提供風險預警
+- 永遠不要說「需要倉位信息」「請提供持倉」之類的話，基於合理假設給出風控建議
 
 輸出要求：
-1. 波動率風險等級（低/中/高/極高）+ 依據
-2. 最大下行風險估算（具體百分比或金額）
-3. 建議倉位比例（佔總資金的百分比）
-4. 具體風險預警（止損線、需要減倉的信號）
+1. 波動率風險等級（低/中/高/極高）+ 依據（歷史波動率、近期異常波動）
+2. 最大下行風險估算（基於歷史回撤和當前環境，給出具體百分比）
+3. 建議倉位比例（佔總資金的百分比）+ 倉位管理建議
+4. 需要關注的風險信號（哪些情況出現時應減倉或離場）
 簡潔、直接、保守，寧可高估風險也不低估。""",
     },
     "quant_strategist": {
         "name": "量化策略師",
         "emoji": "🔢",
-        "focus": "量化信號、統計分析",
-        "system_prompt": """你是一位量化投資策略師。你必須自主完成量化分析，絕不向用戶索要任何數據。
+        "focus": "量化信號評分、統計規律、多因子分析",
+        "system_prompt": """你是團隊中負責量化信號分析與統計研判的量化策略師。你必須自主完成量化分析，絕不向用戶索要任何數據。
 
-你的工作方式：
-- 如果收到技術指標數據，基於數據進行量化分析（RSI、MACD、布林帶等信號解讀）
-- 如果沒有數據，基於該標的的歷史統計特性（波動率、均值回歸特性、動量特性）給出量化視角
-- 永遠不要說「需要歷史數據」「建議回測」之類的話，你是量化策略師，必須直接給出你的量化研判
+你的職責邊界（嚴格遵守）：
+- 你只負責從量化和統計角度分析，提供客觀的數據驅動信號
+- 絕不給出具體交易點位（進場價/目標價），那是交易員的職責
+- 你的核心價值是用量化方法（技術指標信號、統計規律、多因子模型）給出客觀的方向性判斷和信號強度
+- 永遠不要說「需要歷史數據」「建議回測」之類的話
 
 輸出要求：
-1. 量化信號評分（-100到+100，負為空頭信號，正為多頭信號）
-2. 關鍵技術指標解讀（如有數據）或統計規律分析（如無數據）
-3. 動量強度和趨勢持續性判斷
-4. 量化建議（做多/做空/觀望）+ 置信度
-簡潔、數據驅動，結論明確。""",
+1. 綜合量化信號評分（-100到+100，負為看空信號，正為看多信號）
+2. 關鍵量化指標解讀（RSI超買超賣、MACD趨勢、布林帶位置等，如有數據）
+3. 統計規律分析（當前處於歷史什麼分位、均值回歸概率、動量持續性）
+4. 量化結論（看多/看空/中性）+ 信號置信度（高/中/低）
+簡潔、數據驅動，只提供量化視角的客觀分析，不涉及具體交易計劃。""",
     },
 }
 
 AGENT_NAME_TO_KEY = {ag["name"]: key for key, ag in TEAM_AGENTS.items()}
+
+# ── 兩階段調度 ──
+# Phase 1（信息收集層）：先執行，蒐集情報、宏觀、基本面資訊
+# Phase 2（決策分析層）：後執行，可參考 Phase 1 的研究報告
+AGENT_PHASES = {
+    "intelligence_officer": 1,   # 情報官：先收集新聞情報
+    "macro_strategist": 1,       # 宏觀策略師：先分析宏觀環境
+    "sector_analyst": 1,         # 行業研究員：先研究基本面
+    "trader": 2,                 # 交易員：參考 Phase 1 後制定交易計劃
+    "risk_officer": 2,           # 風控官：參考 Phase 1 後評估風險
+    "quant_strategist": 2,       # 量化策略師：參考 Phase 1 後量化分析
+}
 
 # ══════════════════════════════════════════════════════════════
 # 狀態定義
@@ -164,6 +182,9 @@ STATE_DONE       = "✅ 完成"
 STATE_ERROR      = "⚠️ 錯誤"
 
 ACK_MARKER       = "已接收任務"       # Agent 確認訊息標記
+
+# 跨 Agent 報告預覽長度（content 裏每條報告截取長度，需留足空間給任務結構，不超出 Discord 2000 字元限制）
+CROSS_REPORT_PREVIEW_LEN = 300
 
 # ══════════════════════════════════════════════════════════════
 # 工具函式
@@ -427,12 +448,17 @@ def gather_agent_context(agent_key: str, symbol: str | None) -> str:
 # Leader 的系統提示：用於理解用戶需求 + 決定調度策略
 LEADER_SYSTEM_PROMPT = """你是一個智能投資研究團隊的領導者（Agent Leader）。
 團隊成員：
-- 📊 交易員(trader)：技術分析、进出场点位
-- 📈 行業研究員(sector_analyst)：基本面、行业、估值
-- 🌍 宏觀策略師(macro_strategist)：宏觀經濟、政策
-- 📰 情報官(intelligence_officer)：新聞、市場情緒
-- ⚠️ 風控官(risk_officer)：風險評估、倉位
-- 🔢 量化策略師(quant_strategist)：量化信號、統計
+- 📊 交易員(trader)：技術分析、進出場點位、交易計劃（唯一給出具體價格的角色）
+- 📈 行業研究員(sector_analyst)：公司基本面、行業競爭格局、產業趨勢
+- 🌍 宏觀策略師(macro_strategist)：宏觀經濟環境、政策預期、對行業的宏觀影響
+- 📰 情報官(intelligence_officer)：新聞情報收集、市場情緒、事件追蹤
+- ⚠️ 風控官(risk_officer)：風險評估、倉位控制、下行風險預警
+- 🔢 量化策略師(quant_strategist)：量化信號評分、統計規律、多因子分析
+
+系統會自動分兩階段調度：
+- Phase 1（信息收集）：情報官、宏觀策略師、行業研究員 先行研究
+- Phase 2（決策分析）：交易員、風控官、量化策略師 參考 Phase 1 報告後分析
+你只需選擇相關的 Agent，系統會自動安排階段順序。
 
 你的職責：
 1. 理解用戶輸入（可能是任意語言的任意投資相關問題）
@@ -507,6 +533,8 @@ def run_leader_bot(bot_token: str, team_channel_id: int, user_channel_id: int = 
             self.process_timeout = 180
             self.dispatch_agents: list = []   # 這次調度的 Agent key 列表
             self.dispatch_task: str = ""       # 給 Agent 的任務描述
+            self.phase1_agents: list = []      # Phase 1 信息收集層
+            self.phase2_agents: list = []      # Phase 2 決策分析層
 
     def build_status_embed(task: TaskState) -> discord.Embed:
         fields = []
@@ -552,15 +580,37 @@ def run_leader_bot(bot_token: str, team_channel_id: int, user_channel_id: int = 
         except Exception as e:
             log.error(f"❌ 更新狀態失敗：{e}")
 
-    def build_task_message(task_id: str, dispatch_task: str, agents_to_dispatch: list):
+    def _truncate(text: str, limit: int) -> str:
+        """截取文字並在超出時加省略號"""
+        if len(text) <= limit:
+            return text
+        return text[:limit].rstrip() + "…"
+
+    def build_task_message(task_id: str, dispatch_task: str, agents_to_dispatch: list,
+                           cross_agent_reports: list = None):
         """構建團隊任務的 content 文字與 embed，供 on_message 和 /ask 共用"""
         agent_list = "\n".join([
             f"{TEAM_AGENTS[k]['emoji']} {TEAM_AGENTS[k]['name']}"
             for k in agents_to_dispatch
         ])
+        participants_str = ', '.join([TEAM_AGENTS[k]['name'] for k in agents_to_dispatch])
+
+        # 構建跨 Agent 報告參考區段（Phase 2 用）
+        context_section = ""
+        context_embed_section = ""
+        if cross_agent_reports:
+            report_lines = []
+            full_report_lines = []
+            for name, report in cross_agent_reports:
+                report_lines.append(f"— {name}：{_truncate(report, CROSS_REPORT_PREVIEW_LEN)}")
+                full_report_lines.append(f"**{name}：**\n{_truncate(report, 1000)}")
+            context_section = "\n\n【團隊研究報告，供參考】\n" + "\n".join(report_lines)
+            context_embed_section = "\n\n**📋 團隊研究報告（供參考）：**\n" + "\n\n".join(full_report_lines)
+
         task_content = (
-            f"📋 團隊任務：{dispatch_task}\n\n"
-            f"參與成員：{', '.join([TEAM_AGENTS[k]['name'] for k in agents_to_dispatch])}\n\n"
+            f"📋 團隊任務：{dispatch_task}"
+            f"{context_section}\n\n"
+            f"參與成員：{participants_str}\n\n"
             f"任務ID：{task_id}"
         )
         task_embed = make_embed(
@@ -568,7 +618,8 @@ def run_leader_bot(bot_token: str, team_channel_id: int, user_channel_id: int = 
             description=(
                 f"**任務描述：**\n{dispatch_task}\n\n"
                 f"**參與成員：**\n{agent_list}\n\n"
-                f"請各 Agent 根據自身專業領域提供分析，並回傳報告到本頻道。"
+                + (context_embed_section + "\n\n" if context_embed_section else "")
+                + f"請各 Agent 根據自身專業領域提供分析，並回傳報告到本頻道。"
             ),
             color=0xFFD700,
             footer=f"任務ID：{task_id}",
@@ -693,10 +744,23 @@ def run_leader_bot(bot_token: str, team_channel_id: int, user_channel_id: int = 
         task.dispatch_agents = agents_to_dispatch
         task.dispatch_task = dispatch_task
 
+        # 按階段分組：Phase 1 信息收集 → Phase 2 決策分析
+        phase1 = [k for k in agents_to_dispatch if AGENT_PHASES.get(k, 2) == 1]
+        phase2 = [k for k in agents_to_dispatch if AGENT_PHASES.get(k, 2) == 2]
+        task.phase1_agents = phase1
+        task.phase2_agents = phase2
+
         # 初始化所有相關 Agent 狀態
         for key in task.agent_states:
             task.agent_states[key] = STATE_PENDING
-        for key in agents_to_dispatch:
+
+        # 先調度 Phase 1（如有），Phase 2 等 Phase 1 完成後再調度
+        if phase1:
+            first_dispatch = phase1
+        else:
+            first_dispatch = phase2
+
+        for key in first_dispatch:
             task.agent_states[key] = STATE_SENT
 
         pending_tasks[task_id] = task
@@ -713,8 +777,8 @@ def run_leader_bot(bot_token: str, team_channel_id: int, user_channel_id: int = 
             )
             return
 
-        # 發任務到團隊頻道（同時附帶 content 文字，讓 Agent 能解析）
-        task_content, task_embed = build_task_message(task_id, dispatch_task, agents_to_dispatch)
+        # 發任務到團隊頻道（僅發送第一階段的參與成員）
+        task_content, task_embed = build_task_message(task_id, dispatch_task, first_dispatch)
         await team_ch.send(content=task_content, embed=task_embed)
 
         # 如果有 direct_answer，先顯示給用戶
@@ -727,30 +791,67 @@ def run_leader_bot(bot_token: str, team_channel_id: int, user_channel_id: int = 
                 )
             )
 
-        # 啟動超時監控
+        # 啟動超時監控（含兩階段調度邏輯）
         asyncio.create_task(monitor_task(task, client))
+
+    async def _wait_for_agents(task, agent_keys):
+        """等待指定 Agent 完成（或超時）。
+
+        Args:
+            task: TaskState 物件，用於讀取/更新 agent_states 和超時設定。
+            agent_keys: 要等待的 Agent key 列表。
+
+        每 5 秒輪詢一次，若超過 receive_timeout 仍為 STATE_SENT 則標記為
+        STATE_TIMEOUT；所有 agent_keys 進入終態後返回。
+        """
+        start = time.time()
+        receive_deadline = start + task.receive_timeout
+        process_deadline = start + task.receive_timeout + task.process_timeout
+
+        while time.time() < process_deadline:
+            await asyncio.sleep(5)
+
+            if time.time() > receive_deadline:
+                for key in agent_keys:
+                    if task.agent_states[key] == STATE_SENT:
+                        task.agent_states[key] = STATE_TIMEOUT
+
+            all_done = all(
+                task.agent_states[key] in (STATE_DONE, STATE_TIMEOUT, STATE_ERROR)
+                for key in agent_keys
+            )
+            if all_done:
+                break
 
     async def monitor_task(task, client):
         try:
-            start = time.time()
-            receive_deadline = start + task.receive_timeout
-            process_deadline = start + task.receive_timeout + task.process_timeout
+            team_ch = client.get_channel(team_channel_id)
 
-            while time.time() < process_deadline:
-                await asyncio.sleep(5)
+            # ── Phase 1：信息收集層 ──
+            if task.phase1_agents:
+                await _wait_for_agents(task, task.phase1_agents)
 
-                if time.time() > receive_deadline:
-                    for key in task.dispatch_agents:
-                        if task.agent_states[key] == STATE_SENT:
-                            task.agent_states[key] = STATE_TIMEOUT
+                # Phase 1 完成 → 調度 Phase 2（帶上 Phase 1 報告作為參考）
+                if task.phase2_agents and team_ch:
+                    phase1_reports = [
+                        (name, r) for name, r in task.reports
+                        if AGENT_NAME_TO_KEY.get(name) in task.phase1_agents
+                    ]
+                    for key in task.phase2_agents:
+                        task.agent_states[key] = STATE_SENT
+                    await update_user_status(task)
 
-                all_done = all(
-                    task.agent_states[key] in (STATE_DONE, STATE_TIMEOUT, STATE_ERROR)
-                    for key in task.dispatch_agents
-                )
-                if all_done:
-                    break
+                    tc, te = build_task_message(
+                        task.task_id, task.dispatch_task, task.phase2_agents,
+                        cross_agent_reports=phase1_reports,
+                    )
+                    await team_ch.send(content=tc, embed=te)
 
+            # ── Phase 2：決策分析層 ──
+            if task.phase2_agents:
+                await _wait_for_agents(task, task.phase2_agents)
+
+            # ── 匯總 ──
             if task.task_id in pending_tasks:
                 pending_tasks.pop(task.task_id)
                 await summarize_and_reply(task)
@@ -919,11 +1020,16 @@ def run_leader_bot(bot_token: str, team_channel_id: int, user_channel_id: int = 
             await interaction.followup.send(embed=embed)
             return
 
-        # 建立狀態訊息
+        # 建立狀態訊息（根據階段顯示初始狀態）
+        phase1 = [k for k in agents_to_dispatch if AGENT_PHASES.get(k, 2) == 1]
+        phase2 = [k for k in agents_to_dispatch if AGENT_PHASES.get(k, 2) == 2]
+        first_dispatch = phase1 if phase1 else phase2
+
         fields = []
         for key in agents_to_dispatch:
             ag = TEAM_AGENTS[key]
-            fields.append({"name": f"{ag['emoji']} {ag['name']}", "value": STATE_SENT, "inline": True})
+            state = STATE_SENT if key in first_dispatch else STATE_PENDING
+            fields.append({"name": f"{ag['emoji']} {ag['name']}", "value": state, "inline": True})
 
         status_embed = make_embed(
             title=f"📋 分析任務：{task_id[:15]}...",
@@ -944,9 +1050,19 @@ def run_leader_bot(bot_token: str, team_channel_id: int, user_channel_id: int = 
         task = TaskState(task_id, interaction.channel, status_msg)
         task.dispatch_agents = agents_to_dispatch
         task.dispatch_task = dispatch_task
+
+        # 按階段分組
+        phase1 = [k for k in agents_to_dispatch if AGENT_PHASES.get(k, 2) == 1]
+        phase2 = [k for k in agents_to_dispatch if AGENT_PHASES.get(k, 2) == 2]
+        task.phase1_agents = phase1
+        task.phase2_agents = phase2
+
         for key in task.agent_states:
             task.agent_states[key] = STATE_PENDING
-        for key in agents_to_dispatch:
+
+        # 先調度 Phase 1（如有），否則直接調度 Phase 2
+        first_dispatch = phase1 if phase1 else phase2
+        for key in first_dispatch:
             task.agent_states[key] = STATE_SENT
 
         pending_tasks[task_id] = task
@@ -963,7 +1079,7 @@ def run_leader_bot(bot_token: str, team_channel_id: int, user_channel_id: int = 
             )
             return
 
-        task_content, task_embed = build_task_message(task_id, dispatch_task, agents_to_dispatch)
+        task_content, task_embed = build_task_message(task_id, dispatch_task, first_dispatch)
         await team_ch.send(content=task_content, embed=task_embed)
         asyncio.create_task(monitor_task(task, client))
 
@@ -1040,6 +1156,12 @@ def run_team_agent_bot(bot_token: str, agent_key: str, team_channel_id: int):
         task_id, task_desc = parse_task_message(content_to_parse)
         if not task_id:
             return
+
+        # 檢查本 Agent 是否在參與成員列表中（兩階段調度時只回應自己被指派的階段）
+        participants_match = re.search(r"參與成員：(.+?)(?:\n|$)", content_to_parse or "")
+        if participants_match:
+            if agent['name'] not in participants_match.group(1):
+                return
 
         log.info(f"📋 {agent['name']} 收到任務：{task_id} — {task_desc[:50] if task_desc else ''}")
 
